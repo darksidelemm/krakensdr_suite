@@ -1,0 +1,108 @@
+# Heimdall .gitignore
+
+# Compiled executable
+heimdall
+
+# uWebSockets library (downloaded during build)
+uWebSockets/
+
+# Include directory if using header-only approach
+include/
+
+# Library directory if created
+lib/
+
+# Build artifacts
+*.o
+*.a
+*.so
+*.out
+*.exe
+
+# Temporary files
+*.tmp
+*.swp
+*.swo
+*~
+.DS_Store
+
+# IDE and editor files
+.vscode/
+.idea/
+*.sublime-*
+*.code-workspace
+
+# Debug files
+*.dSYM/
+*.su
+*.idb
+*.pdb
+vgcore.*
+
+# Backup files
+*.bak
+*.backup
+*.old
+
+# Log files
+*.log
+*.txt.log
+
+# Python cache if using any Python scripts
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Build directories
+build/
+cmake-build-*/
+out/
+
+# CMake files (if you switch to CMake later)
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile.cmake
+
+# Documentation build
+docs/_build/
+docs/html/
+doxygen/
+
+# Test files
+test_*
+*_test
+
+# Data files (if large)
+*.dat
+*.bin
+*.raw
+
+# Config files with local settings (optional)
+config.local.h
+settings.local.json
+
+# Profiling data
+gmon.out
+*.gcda
+*.gcno
+*.gcov
+callgrind.out.*
+
+# Package files
+*.tar.gz
+*.zip
+*.deb
+*.rpm
+
+# Keep these files
+!Makefile
+!config.h
+!index.html
+!*.cpp
+!*.h
+!*.md
+!.gitignore
+
+# Runtime settings (persisted per-machine, not source)
+heimdall_settings.conf

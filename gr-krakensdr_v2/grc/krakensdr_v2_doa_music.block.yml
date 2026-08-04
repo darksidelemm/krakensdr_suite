@@ -1,0 +1,90 @@
+id: krakensdr_v2_doa_music
+label: DoA MUSIC v2
+category: '[KrakenSDR v2]'
+
+templates:
+  imports: from gnuradio import krakensdr_v2
+  make: krakensdr_v2.doa_music(${vec_len}, ${freq}, ${array_dist}, ${num_elements}, ${array_type}, ${signal_dimension})
+  callbacks:
+  - set_freq(${freq})
+  - set_array_dist(${array_dist})
+  - set_array_type(${array_type})
+
+parameters:
+- id: vec_len
+  label: Vector Length (snapshot)
+  dtype: int
+  default: 2048
+- id: freq
+  label: Frequency [MHz]
+  dtype: real
+  default: 100.0
+- id: array_dist
+  label: UCA Radius / ULA Spacing [m]
+  dtype: real
+  default: 0.25
+- id: num_elements
+  label: Antenna Elements
+  dtype: int
+  default: 5
+- id: array_type
+  label: Array Type ("UCA"/"ULA")
+  dtype: raw
+  default: '"UCA"'
+- id: signal_dimension
+  label: Signal Sources
+  dtype: int
+  default: 1
+
+inputs:
+- label: ch
+  domain: stream
+  dtype: complex
+  vlen: ${ vec_len }
+  multiplicity: ${ num_elements }
+
+outputs:
+- label: doa
+  domain: stream
+  dtype: float
+  vlen: 360
+- label: angle
+  domain: stream
+  dtype: float
+  optional: true
+- label: conf
+  domain: stream
+  dtype: float
+  optional: true
+
+asserts:
+- ${ vec_len > 0 }
+- ${ num_elements >= 2 }
+- ${ signal_dimension >= 1 and signal_dimension < num_elements }
+
+documentation: |-
+  MUSIC direction-of-arrival estimator for the KrakenSDR (krakensdr_v2).
+
+  Feed it num_elements sample-aligned complex vector streams (from the
+  KrakenSDR v2 Source, optionally decimated by IDENTICAL per-channel
+  filters). One DoA estimate is produced per input vector.
+
+  Outputs:
+   - doa:   float[360] pseudospectrum, normalized to peak = 0 dB, floored
+            at -100 dB, one bin per degree
+   - angle: interpolated peak angle in degrees [0, 360)
+   - conf:  confidence 0..1 (peak-to-mean of the linear pseudospectrum)
+
+  Angle convention (matches kraken_doa_v2): unit circle - 0 deg is the
+  antenna 0 direction (+x axis), counter-clockwise positive. The UCA ring is
+  expected to be wired clockwise, so element k sits at -360k/M degrees on a
+  ring of the given radius (that mirror is what keeps the reported azimuth
+  counter-clockwise). ULA elements lie
+  along +x with the given spacing and use the kraken_doa_v2 ULA frame:
+  0 deg = broadside, and an angle is ambiguous with 180 deg minus it.
+
+  Frequency sets the wavelength for the steering vectors and can be updated
+  at runtime (tie it to the same variable as the source frequency). The
+  UCA radius / ULA spacing is also runtime-settable (set_array_dist).
+
+file_format: 1

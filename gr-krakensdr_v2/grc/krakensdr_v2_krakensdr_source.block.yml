@@ -1,0 +1,88 @@
+id: krakensdr_v2_krakensdr_source
+label: KrakenSDR v2 Source
+category: '[KrakenSDR v2]'
+
+templates:
+  imports: from gnuradio import krakensdr_v2
+  make: krakensdr_v2.krakensdr_source(${ip_addr}, ${data_port}, ${ctrl_port}, ${num_channels}, ${freq}, ${gain}, ${coherent_only}, ${dc_correction}, ${debug})
+  callbacks:
+  - set_freq(${freq})
+  - set_gain(${gain})
+
+parameters:
+- id: ip_addr
+  label: Heimdall v2 Address
+  dtype: string
+  default: 127.0.0.1
+- id: data_port
+  label: Data Port
+  dtype: int
+  default: 8091
+- id: ctrl_port
+  label: Control Port
+  dtype: int
+  default: 8092
+- id: num_channels
+  label: Number of Channels
+  dtype: int
+  default: 5
+- id: freq
+  label: Frequency [MHz]
+  dtype: real
+  default: 100.0
+- id: gain
+  label: Gain [dB] (neg = AGC)
+  dtype: real
+  default: 40.2
+- id: coherent_only
+  label: Coherent Data Only
+  dtype: bool
+  default: 'True'
+  options: ['True', 'False']
+  option_labels: [Drop cal/retune frames, Pass all frames]
+- id: dc_correction
+  label: DC Offset Correction
+  dtype: bool
+  default: 'True'
+  hide: part
+- id: debug
+  label: Debug
+  dtype: bool
+  default: 'False'
+  hide: part
+
+outputs:
+- label: ch
+  domain: stream
+  dtype: complex
+  multiplicity: ${ num_channels }
+
+asserts:
+- ${ num_channels >= 1 }
+- ${ num_channels <= 16 }
+
+documentation: |-
+  Coherent multi-channel source for the Heimdall v2 server (krakensdr_v2).
+
+  Run heimdall_v2 first, then start the flowgraph. The block connects to the
+  TCP data server (default port 8091) and streams the phase-coherent,
+  calibration-compensated channels as complex streams. Frequency and gain are
+  set through the JSON control port (default 8092) and are changeable at
+  runtime; every change triggers heimdall's ~3 s cooldown followed by an
+  automatic phase recalibration (using the noise source), during which output
+  pauses if 'Coherent Data Only' is enabled.
+
+  Coherent Data Only: drop packets carrying calibration noise or captured
+  mid-retune, so the outputs only ever contain antenna data. Set to 'Pass all
+  frames' to also receive calibration-noise frames (used by the correlation
+  check example). The noise source can be forced on manually from the
+  heimdall web UI (port 8070).
+
+  Stream tags on every output at frames whose metadata changed:
+  rx_freq (Hz), phase_state (4 = converged), noise_source (bool).
+
+  Gain is a single value applied to all tuners by heimdall_v2 (negative
+  enables AGC). Data-validity rule: samples are calibrated antenna data when
+  phase_state == 4 and noise_source is false.
+
+file_format: 1

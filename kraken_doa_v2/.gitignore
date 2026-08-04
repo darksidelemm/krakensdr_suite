@@ -1,0 +1,30 @@
+# Build artifacts
+obj/
+dep/
+kraken_doa
+
+# Vendored dependency (auto-installed by Makefile)
+uWebSockets/
+
+# Runtime files
+fingerprints.db
+fftw_wisdom*
+doa_settings.json
+doa_settings.json.tmp
+*.pem
+*.key
+*.crt
+
+# DoA recordings (fixed output folder + common log extensions)
+doa_recordings/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.db
+doa_log_*.csv
+
+# Editor/backup files
+*.backup
+*.bak
+*.swp
+*~

@@ -1,0 +1,6 @@
+/*!
+ * \defgroup block GNU Radio KRAKENSDR_V2 C++ Signal Processing Blocks
+ * \brief All C++ blocks that can be used from the KRAKENSDR_V2 GNU Radio
+ *        module are listed here or in the subcategories below.
+ *
+ */

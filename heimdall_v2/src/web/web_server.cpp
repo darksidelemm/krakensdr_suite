@@ -1,0 +1,482 @@
+#include "web_server.hpp"
+#include "html_loader.hpp"
+#include "../sdr/sdr_init.hpp"
+#include "../sdr/pipeline_control.hpp"
+#include "../dsp/correlation.hpp"  // For build_correlation_message
+#include "../dsp/compensation.hpp" // get_phase_compensation_state (kerberos stale check)
+#include "../core/config.hpp"
+#include "../core/logging.hpp"
+#include "../core/settings.hpp"
+#include "../core/forward_comp.hpp"
+#include "App.h"  // uWebSockets main header
+#include <iostream>
+#include <map>
+#include <functional>
+#include <string>
+#include <algorithm>
+#include <thread>
+
+// Global web server state
+std::thread web_thread;
+void* global_app = nullptr;
+void* loop = nullptr;
+void* broadcast_timer = nullptr;
+
+// Global references for timer callback (set by main.cpp)
+static CorrelationResult* global_correlation_result = nullptr;
+static FFTProcessingControl* global_fft_control = nullptr;
+
+// uWebSockets C interface for timer
+extern "C" {
+    struct us_timer_t* us_create_timer(struct us_loop_t* loop, int fallthrough, unsigned int ext_size);
+    void us_timer_set(struct us_timer_t* timer, void (*cb)(struct us_timer_t* t), int ms, int repeat_ms);
+    void us_timer_close(struct us_timer_t* timer);
+    void us_wakeup_loop(struct us_loop_t* loop);
+}
+
+// Minimal JSON string escaper (filenames may contain spaces; quotes/backslashes
+// are escaped, control chars dropped). Enough for the small strings we emit.
+static std::string json_escape(const std::string& s) {
+    std::string o;
+    o.reserve(s.size() + 2);
+    for (char c : s) {
+        if (c == '"' || c == '\\') { o += '\\'; o += c; }
+        else if (static_cast<unsigned char>(c) >= 0x20) o += c;
+    }
+    return o;
+}
+
+// Periodic-recal + forward-comp state pushed to the UI as a TEXT frame (the
+// binary broadcast feed carries correlation/FFT data). Sent on connect and
+// re-broadcast at a low rate from the timer so the counters / settings stay live.
+static std::string build_state_message() {
+    std::string s = std::string("STATE:{\"num_elements\":")
+        + std::to_string(active_num_elements.load(std::memory_order_relaxed))
+        + ",\"max_elements\":"
+        + std::to_string(expected_serials.size())
+        + ",\"reconfiguring\":"
+        + (reconfig_in_progress.load(std::memory_order_relaxed) ? "true" : "false")
+        + ",\"periodic_recal_enabled\":"
+        + (periodic_recal_enabled.load(std::memory_order_relaxed) ? "true" : "false")
+        + ",\"periodic_recal_minutes\":"
+        + std::to_string(periodic_recal_minutes.load(std::memory_order_relaxed))
+        + ",\"recal_lag_fails\":"
+        + std::to_string(periodic_recal_lag_fail_count.load(std::memory_order_relaxed))
+        + ",\"recal_phase_fails\":"
+        + std::to_string(periodic_recal_phase_fail_count.load(std::memory_order_relaxed))
+        + ",\"antenna_bias_tee_mask\":"
+        + std::to_string(antenna_bias_tee_mask.load(std::memory_order_relaxed));
+
+    // KerberosSDR support mode: drives the warning banner + guarded recal button.
+    s += ",\"kerberos_mode\":";
+    s += kerberos_mode.load(std::memory_order_relaxed) ? "true" : "false";
+    if (kerberos_mode.load(std::memory_order_relaxed)) {
+        s += ",\"kerberos_sw\":";
+        s += kerberos_sw_mode.load(std::memory_order_relaxed) ? "true" : "false";
+        s += ",\"calibration_state\":\"";
+        s += kerberos_calibration_state();
+        s += "\"";
+    }
+
+    // Forward (S2P) phase compensation state.
+    s += ",\"fwd_comp_enabled\":";
+    s += forward_comp.enabled.load(std::memory_order_relaxed) ? "true" : "false";
+    s += ",\"fwd_comp_amplitude\":";
+    s += forward_comp.correct_amplitude.load(std::memory_order_relaxed) ? "true" : "false";
+    {
+        std::lock_guard<std::mutex> lk(forward_comp.mutex);
+        s += ",\"fwd_comp_files\":[";
+        for (int i = 0; i < NUM_DEVICES; ++i) {
+            if (i) s += ',';
+            s += '"'; s += json_escape(forward_comp.files[i]); s += '"';
+        }
+        s += "],\"fwd_comp_loaded\":[";
+        for (int i = 0; i < NUM_DEVICES; ++i) {
+            if (i) s += ',';
+            s += forward_comp.loaded[i] ? "true" : "false";
+        }
+        s += "]";
+    }
+    s += "}";
+    return s;
+}
+
+void web_server_main(CorrelationResult& correlation_result, FFTProcessingControl& fft_control) {
+    // Store global references for timer callback
+    global_correlation_result = &correlation_result;
+    global_fft_control = &fft_control;
+    
+    struct PerSocketData {};
+    
+    auto app = uWS::App().get("/s2p_files", [](auto* res, auto* /*req*/) {
+        // List the .s2p files available in the calibration folder so the UI can
+        // populate the per-channel dropdowns. (Registered before "/*" so the
+        // wildcard HTML handler does not swallow it.)
+        std::string body = "{\"dir\":\"" + json_escape(fwdcomp::CAL_DIR) + "\",\"files\":[";
+        auto files = fwdcomp::list_files();
+        for (size_t i = 0; i < files.size(); ++i) {
+            if (i) body += ',';
+            body += '"'; body += json_escape(files[i]); body += '"';
+        }
+        body += "]}";
+        res->writeHeader("Content-Type", "application/json")->end(body);
+    }).post("/s2p_upload", [](auto* res, auto* req) {
+        // Browser uploads one .s2p file: target filename in the ?name= query
+        // (URL-decoded), the raw file as the request body. The body streams in,
+        // so we accumulate it and act on the final chunk. (req is only valid
+        // synchronously - capture the name before returning.)
+        std::string fname(req->getQuery("name"));
+        auto body    = std::make_shared<std::string>();
+        auto aborted = std::make_shared<bool>(false);
+        auto over    = std::make_shared<bool>(false);
+        res->onAborted([aborted]() { *aborted = true; });
+        res->onData([res, body, aborted, over, fname = std::move(fname)]
+                    (std::string_view chunk, bool last) mutable {
+            constexpr size_t kMaxUpload = 8u * 1024 * 1024;  // S2P files are KB; cap abuse
+            if (!*over) {
+                if (body->size() + chunk.size() > kMaxUpload) *over = true;
+                else body->append(chunk.data(), chunk.size());
+            }
+            if (!last || *aborted) return;
+
+            std::string err;
+            bool ok;
+            if (*over) { ok = false; err = "file too large"; }
+            else       ok = fwdcomp::save_uploaded_file(fname, *body, err);
+            if (ok)
+                std::cout << "Forward comp: uploaded S2P file '" << fname << "'" << std::endl;
+            else
+                std::cerr << "Forward comp: upload of '" << fname << "' rejected: " << err << std::endl;
+
+            std::string out = std::string("{\"ok\":") + (ok ? "true" : "false")
+                + ",\"name\":\"" + json_escape(fname) + "\"";
+            if (!ok) out += ",\"error\":\"" + json_escape(err) + "\"";
+            out += "}";
+            if (ok) res->writeHeader("Content-Type", "application/json")->end(out);
+            else    res->writeStatus("400 Bad Request")
+                       ->writeHeader("Content-Type", "application/json")->end(out);
+        });
+    }).post("/s2p_delete", [](auto* res, auto* req) {
+        // Delete a calibration file (?name=). Synchronous - no body to read.
+        std::string fname(req->getQuery("name"));
+        std::string err;
+        bool ok = fwdcomp::delete_file(fname, err);
+        if (ok) {
+            // delete_file cleared any channel that used it; rebuild the
+            // correction at the current frequency and persist the change.
+            fwdcomp::recompute(static_cast<double>(current_frequency.load()));
+            settings::save();
+            std::cout << "Forward comp: deleted S2P file '" << fname << "'" << std::endl;
+        } else {
+            std::cerr << "Forward comp: delete of '" << fname << "' failed: " << err << std::endl;
+        }
+        std::string out = std::string("{\"ok\":") + (ok ? "true" : "false")
+            + ",\"name\":\"" + json_escape(fname) + "\"";
+        if (!ok) out += ",\"error\":\"" + json_escape(err) + "\"";
+        out += "}";
+        if (ok) res->writeHeader("Content-Type", "application/json")->end(out);
+        else    res->writeStatus("400 Bad Request")
+                   ->writeHeader("Content-Type", "application/json")->end(out);
+    }).get("/*", [](auto* res, auto* /*req*/) {
+        res->writeHeader("Content-Type", "text/html; charset=utf-8")->end(get_html_content());
+    }).ws<PerSocketData>("/*", {
+        .compression = uWS::DISABLED,
+        .maxPayloadLength = 16 * 1024,
+        .idleTimeout = 120,
+        
+        .open = [](auto* ws) {
+            ws->subscribe("broadcast");
+            std::cout << "WebSocket client connected" << std::endl;
+            // Push the current periodic-recal state immediately so the UI reflects
+            // the persisted settings + counters on load.
+            ws->send(build_state_message(), uWS::TEXT);
+        },
+        
+        .message = [&](auto* /*ws*/, std::string_view message, uWS::OpCode) {
+            // While an element-count reconfiguration owns the devices, every
+            // command is refused: most handlers below touch device handles that
+            // are being closed/reopened on another thread.
+            if (reconfig_in_progress.load(std::memory_order_acquire)) {
+                std::cerr << "Web: command ignored during element-count reconfiguration: "
+                          << std::string(message).substr(0, 40) << std::endl;
+                return;
+            }
+
+            static const std::map<std::string_view, std::function<void()>> handlers = {
+                {"FFT_ENABLE", [&fft_control]() {
+                    std::lock_guard<std::mutex> lock(fft_control.control_mutex);
+                    bool was_auto = fft_control.auto_disabled;
+                    fft_control.fft_enabled = true;
+                    fft_control.auto_disabled = false;
+                    if (was_auto) fft_control.user_override = true;
+                    std::cout << "FFT: Enabled" << std::endl;
+                }},
+                {"FFT_DISABLE", [&fft_control]() {
+                    std::lock_guard<std::mutex> lock(fft_control.control_mutex);
+                    fft_control.fft_enabled = false;
+                    fft_control.auto_disabled = false;
+                    std::cout << "FFT: Disabled" << std::endl;
+                }},
+                {"BIAS_TEE_ENABLE", []() { set_bias_tee_all_devices(true, devices); }},
+                {"BIAS_TEE_DISABLE", []() { set_bias_tee_all_devices(false, devices); }},
+                {"PER_BIN_ENABLE", []() {
+                    per_bin_cal.enabled.store(true, std::memory_order_release);
+                    settings::save();  // remember across restarts
+                    std::cout << "Per-bin phase calibration: Enabled" << std::endl;
+                    // If calibration already finished, re-open it to build the
+                    // equalizer; otherwise the in-progress run will build it on
+                    // convergence (per_bin_measured is false).
+                    bool converged = false;
+                    if (phase_compensation) {
+                        std::lock_guard<std::mutex> lock(phase_compensation->state_mutex);
+                        converged = (phase_compensation->state == PhaseCompensatorState::CONVERGED);
+                    }
+                    if (converged) handle_settings_change();
+                }},
+                {"PER_BIN_DISABLE", []() {
+                    per_bin_cal.enabled.store(false, std::memory_order_release);
+                    per_bin_cal.ready.store(false, std::memory_order_release);
+                    settings::save();  // remember across restarts
+                    std::cout << "Per-bin phase calibration: Disabled" << std::endl;
+                }},
+                {"PERIODIC_RECAL_ENABLE", []() {
+                    periodic_recal_enabled.store(true, std::memory_order_release);
+                    settings::save();  // remember across restarts
+                    std::cout << "Periodic calibration check: Enabled" << std::endl;
+                }},
+                {"PERIODIC_RECAL_DISABLE", []() {
+                    periodic_recal_enabled.store(false, std::memory_order_release);
+                    settings::save();  // remember across restarts
+                    std::cout << "Periodic calibration check: Disabled" << std::endl;
+                }},
+                {"FORCE_RECAL", []() {
+                    // Routed through the coherence watchdog so all recalibration
+                    // stays serialized on one thread (see coherence_watchdog).
+                    force_recalibration.store(true, std::memory_order_release);
+                    std::cout << "Force recalibration requested via web UI" << std::endl;
+                }},
+                {"FWD_COMP_ENABLE", []() {
+                    forward_comp.enabled.store(true, std::memory_order_release);
+                    // Build the correction at the current center frequency so it
+                    // takes effect immediately (no recal needed - it is independent
+                    // of the noise-source loop).
+                    fwdcomp::recompute(static_cast<double>(current_frequency.load()));
+                    settings::save();
+                    std::cout << "Forward phase compensation: Enabled" << std::endl;
+                }},
+                {"FWD_COMP_DISABLE", []() {
+                    forward_comp.enabled.store(false, std::memory_order_release);
+                    settings::save();
+                    std::cout << "Forward phase compensation: Disabled" << std::endl;
+                }},
+                {"FWD_COMP_AMP_ON", []() {
+                    forward_comp.correct_amplitude.store(true, std::memory_order_release);
+                    fwdcomp::recompute(static_cast<double>(current_frequency.load()));
+                    settings::save();
+                    std::cout << "Forward comp: amplitude correction ON" << std::endl;
+                }},
+                {"FWD_COMP_AMP_OFF", []() {
+                    forward_comp.correct_amplitude.store(false, std::memory_order_release);
+                    fwdcomp::recompute(static_cast<double>(current_frequency.load()));
+                    settings::save();
+                    std::cout << "Forward comp: amplitude correction OFF (phase-only)" << std::endl;
+                }}
+            };
+            
+            // Check for SDR settings
+            if (message.find("SDR_SETTINGS:") == 0) {
+                auto json_part = message.substr(13);
+                uint64_t new_freq = 0;
+                int new_gain = -999;
+                
+                auto extract_value = [&](std::string_view key) -> double {
+                    auto pos = json_part.find(key);
+                    if (pos == std::string_view::npos) return -999;
+                    pos += key.length();
+                    auto end = json_part.find_first_of(",}", pos);
+                    return (end != std::string_view::npos) ? std::stod(std::string(json_part.substr(pos, end - pos))) : -999;
+                };
+                
+                if (auto freq = extract_value("\"frequency\":"); freq > 0) {
+                    new_freq = static_cast<uint64_t>(freq);
+                }
+                if (auto gain = extract_value("\"gain\":"); gain != -999) {
+                    new_gain = (gain < 0) ? -1 : static_cast<int>(gain * 10);
+                }
+                
+                if (new_freq > 0 || new_gain != -999) {
+                    if (update_sdr_settings(new_freq, new_gain, devices)) {
+                        if (new_freq > 0 && recovery_in_progress.load(std::memory_order_acquire)) {
+                            // A coherence recovery is recalibrating: update_sdr_settings
+                            // already retuned the hardware, and the recovery will
+                            // recalibrate lag+phase at the new frequency. Do NOT run the
+                            // cooldown override here - clobbering the recovery's phase
+                            // state and killing its noise source would wedge calibration.
+                            std::cout << "Frequency changed during coherence recovery: deferring to the full recal" << std::endl;
+                        } else if (new_freq > 0 && kerberos_manual_cal_only()) {
+                            // --kerberos: no automatic recal after a retune.
+                            // Keep the old compensation applied (approximately
+                            // valid nearby) and mark it STALE for the UIs.
+                            if (get_phase_compensation_state() == PhaseCompensatorState::CONVERGED) {
+                                kerberos_cal_stale.store(true, std::memory_order_release);
+                                std::cerr << "KerberosSDR: frequency changed - calibration is STALE. "
+                                             "Disconnect antennas and press Recalibrate." << std::endl;
+                            }
+                        } else if (new_freq > 0) {
+                            // Frequency changed - use cooldown approach
+                            set_bias_tee_all_devices(false, devices);
+
+                            if (phase_compensation) {
+                                std::lock_guard<std::mutex> lock(phase_compensation->state_mutex);
+                                phase_compensation->last_frequency_change = std::chrono::steady_clock::now();
+                                phase_compensation->cooldown_active = true;
+                                phase_compensation->state = PhaseCompensatorState::WAITING_FOR_STABILITY;
+                                phase_compensation->compensation_applied = false;
+                                phase_compensation->convergence_count = 0;
+                                phase_compensation->stable_nonzero_count = 0;
+                                phase_compensation->failed_convergence_attempts = 0;
+                                phase_compensation->checks_since_compensation = 0;
+                                // Stop applying the old-frequency per-bin equalizer during the
+                                // cooldown; it will be rebuilt when recalibration completes.
+                                phase_compensation->per_bin_measured = false;
+                                per_bin_cal.ready.store(false, std::memory_order_release);
+
+                                for (int i = 0; i < NUM_DEVICES; i++) {
+                                    if (i != REF_CHANNEL) {
+                                        phase_compensation->compensation_vector.store(i, Complex(1.0f, 0.0f));
+                                    }
+                                }
+                                std::cout << "Frequency changed via web UI: entering " << phase_compensation->stability_delay_override_ms.load() << "ms cooldown" << std::endl;
+                            }
+                        } else {
+                            // Gain-only change - immediate calibration
+                            handle_settings_change();
+                        }
+                    }
+                }
+            } 
+            // Runtime element-count change: "NUM_ELEMENTS:<n>". Runs on a
+            // detached worker - it stops the pipeline and reopens devices
+            // (seconds), which must never block the uWS event loop. Progress
+            // is visible via the "reconfiguring" flag in the STATE broadcast,
+            // and the recalibration that follows via the normal status feed.
+            else if (message.find("NUM_ELEMENTS:") == 0) {
+                auto n_str = message.substr(13);
+                try {
+                    const int n = std::stoi(std::string(n_str));
+                    std::thread([n]() {
+                        std::string err;
+                        if (!reconfigure_num_elements(n, err)) {
+                            std::cerr << "Element-count change to " << n << " failed: " << err << std::endl;
+                        }
+                    }).detach();
+                } catch (const std::exception&) {
+                    std::cerr << "Web: invalid NUM_ELEMENTS: " << n_str << std::endl;
+                }
+            }
+            // RTL-TCP channel selection
+            else if (message.find("RTL_TCP_CHANNEL:") == 0) {
+                auto channel_str = message.substr(16);
+                try {
+                    int channel = std::stoi(std::string(channel_str));
+                    if (channel >= 0 && channel < active_num_elements.load()) {
+                        rtl_tcp_channel = channel;
+                        // Note: RTL-TCP server update would be handled by the calling code
+                        std::cout << "RTL-TCP: Channel changed to " << channel << std::endl;
+                    } else {
+                        std::cerr << "RTL-TCP: Invalid channel " << channel << " (must be 0-" << (active_num_elements.load() - 1) << ")" << std::endl;
+                    }
+                } catch (const std::exception& e) {
+                    std::cerr << "RTL-TCP: Invalid channel format: " << channel_str << std::endl;
+                }
+            }
+            // Per-port antenna bias tees: "ANT_BIAS_MASK:<bitmask>" (bit N = channel N)
+            else if (message.find("ANT_BIAS_MASK:") == 0) {
+                auto mask_str = message.substr(14);
+                try {
+                    const uint32_t mask = static_cast<uint32_t>(std::stoul(std::string(mask_str)))
+                                          & ((1u << NUM_DEVICES) - 1);
+                    apply_antenna_bias_tees(mask, devices);
+                    settings::save();  // remember across restarts
+                } catch (const std::exception&) {
+                    std::cerr << "Bias tees: invalid ANT_BIAS_MASK: " << mask_str << std::endl;
+                }
+            }
+            // Periodic recalibration check period (minutes)
+            else if (message.find("PERIODIC_RECAL_PERIOD:") == 0) {
+                auto minutes_str = message.substr(22);
+                try {
+                    int minutes = std::stoi(std::string(minutes_str));
+                    minutes = std::max(1, std::min(minutes, 1440));  // clamp 1 min .. 24 h
+                    periodic_recal_minutes.store(minutes, std::memory_order_release);
+                    settings::save();  // remember across restarts
+                    std::cout << "Periodic calibration check: period set to " << minutes << " min" << std::endl;
+                } catch (const std::exception& e) {
+                    std::cerr << "Periodic recal: invalid period: " << minutes_str << std::endl;
+                }
+            }
+            // Forward-comp per-channel file: "FWD_COMP_FILE:<ch>:<filename>"
+            // (empty filename clears the channel).
+            else if (message.find("FWD_COMP_FILE:") == 0) {
+                auto rest = message.substr(14);
+                auto colon = rest.find(':');
+                if (colon != std::string_view::npos) {
+                    try {
+                        int ch = std::stoi(std::string(rest.substr(0, colon)));
+                        std::string fname(rest.substr(colon + 1));
+                        std::string err;
+                        bool ok = fwdcomp::set_channel_file(ch, fname, err);
+                        if (!ok && !fname.empty())
+                            std::cerr << "Forward comp: ch" << ch << " load failed: " << err << std::endl;
+                        else
+                            std::cout << "Forward comp: ch" << ch << " file = '" << fname << "'" << std::endl;
+                        // Re-interpolate at the current frequency and persist.
+                        fwdcomp::recompute(static_cast<double>(current_frequency.load()));
+                        settings::save();
+                    } catch (const std::exception& e) {
+                        std::cerr << "Forward comp: bad FWD_COMP_FILE: " << e.what() << std::endl;
+                    }
+                }
+            }
+            else {
+                auto it = handlers.find(message);
+                if (it != handlers.end()) it->second();
+            }
+        },
+        
+        .close = [](auto* /*ws*/, int, std::string_view) {
+            std::cout << "WebSocket client disconnected" << std::endl;
+        }
+    }).listen(WEB_PORT, [&](auto* listen_socket) {
+        if (listen_socket) {
+            std::cout << "Web server listening on http://localhost:" << WEB_PORT << " (uWebSockets)" << std::endl;
+            
+            auto* uws_loop = uWS::Loop::get();
+            loop = uws_loop;
+            struct us_loop_t* native_loop = (struct us_loop_t*)uws_loop;
+            auto* timer = us_create_timer(native_loop, 0, 0);
+            broadcast_timer = timer;
+            
+            us_timer_set(timer, [](struct us_timer_t* /*timer*/) {
+                if (global_app && global_correlation_result && global_fft_control) {
+                    try {
+                        auto message = build_correlation_message(*global_correlation_result, *global_fft_control);
+                        static_cast<uWS::App*>(global_app)->publish("broadcast", message, uWS::BINARY, false);
+                        // Re-broadcast the periodic-recal state (settings + drift-fail
+                        // counters) about once a second so the UI counters update live.
+                        static int state_tick = 0;
+                        if (++state_tick >= 20) {
+                            state_tick = 0;
+                            static_cast<uWS::App*>(global_app)->publish("broadcast", build_state_message(), uWS::TEXT, false);
+                        }
+                    } catch (const std::exception& e) {
+                        std::cerr << "Error building correlation message: " << e.what() << std::endl;
+                    }
+                }
+            }, 50, 50);
+        }
+    });
+    
+    global_app = &app;
+    app.run();
+}

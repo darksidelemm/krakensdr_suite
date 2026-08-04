@@ -1,0 +1,8 @@
+logs/
+kraken_doa_v2/fft_wisdom.dat
+# librtlsdr is NOT part of this repo: install.sh clones and builds the
+# krakenrf fork here automatically (removed from tracking - it used to be a
+# bare gitlink that left broken empty dirs in fresh checkouts).
+librtlsdr/
+# CMake build tree of the GNU Radio OOT module (machine-specific artifacts)
+gr-krakensdr_v2/build/

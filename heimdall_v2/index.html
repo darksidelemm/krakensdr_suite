@@ -1,0 +1,1569 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Heimdall - RTL-SDR Cross-Correlation</title>
+    <script src="https://cdn.jsdelivr.net/npm/uplot@1.6.30/dist/uPlot.iife.min.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/uplot@1.6.30/dist/uPlot.min.css">
+    <style>
+        :root{--bg:#f0f0f0;--card:#fff;--border:#ddd;--text:#333;--green:#28a745;--red:#dc3545;--blue:#007bff;--yellow:#ffc107;--shadow:0 2px 4px rgba(0,0,0,0.1);--gray:#6c757d}
+        *{box-sizing:border-box}
+        body{font:14px Arial;margin:20px;background:var(--bg)}
+        h1,h3{color:var(--text);text-align:center;margin:10px 0}
+        .card{background:var(--card);padding:15px;border-radius:5px;box-shadow:var(--shadow);margin:20px 0}
+        .status{background:#e0e0e0;text-align:center}
+        .connected{color:var(--green)}.error{color:var(--red)}
+        .control-section{text-align:center;margin-bottom:20px}
+        .control-group{display:inline-block;margin:0 20px;vertical-align:top}
+        .control-group.disabled{opacity:0.5;pointer-events:none}
+        .fft-status,.bias-status{margin:10px 0;padding:10px;border-radius:5px;font-weight:bold}
+        .fft-enabled,.bias-enabled{background:#d4edda;color:#155724}
+        .fft-disabled,.bias-disabled{background:#f8d7da;color:#721c24}
+        .fft-auto-disabled{background:#fff3cd;color:#856404}
+        .chk{margin:10px;font-size:16px}
+        .chk input{transform:scale(1.5);margin-right:10px}
+        .chk input:disabled{opacity:0.5}
+        table{width:100%;border-collapse:collapse;margin-top:10px;table-layout:fixed}
+        th,td{border:1px solid var(--border);padding:8px;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        th{background:#f2f2f2;font-weight:bold}
+        .s0{background:#fff3cd;color:#856404}
+        .s1{background:#f8d7da;color:#721c24}
+        .s2{background:#d1ecf1;color:#0c5460}
+        .s3{background:#d4edda;color:#155724}
+        .s4{background:#cce5ff;color:#004085}
+        .s5{background:#e2d9f3;color:#42297a}
+        .l1{color:var(--red)}.l0{color:var(--green);font-weight:bold}.l-1{color:var(--blue)}
+        .plots{display:flex;flex-wrap:wrap;gap:15px;justify-content:center}
+        .plot{background:var(--card);padding:10px;border-radius:5px;box-shadow:var(--shadow)}
+        .plot-title{text-align:center;font-weight:bold;margin-bottom:10px;color:var(--text)}
+        .uplot{margin:0 auto}
+        .uplot .u-axis{font-size:11px}
+        .uplot .u-legend{font-size:12px}
+        .info{text-align:center;margin:20px 0;color:#666;font-size:12px}
+        .comp-active{background:#fff3cd;border-left:4px solid var(--yellow);padding:10px;margin:10px 0}
+        .comp-inactive{background:#d4edda;border-left:4px solid var(--green);padding:10px;margin:10px 0}
+        .sdr-controls{margin:15px 0}
+        .sdr-control-item{margin:10px 0;display:flex;align-items:center;gap:10px}
+        .sdr-control-item label{min-width:120px;font-weight:bold}
+        .sdr-control-item input{width:100px;padding:5px;border:1px solid var(--border);border-radius:3px}
+        .sdr-control-item select{width:120px;padding:5px;border:1px solid var(--border);border-radius:3px;background:#fff;cursor:pointer}
+        .sdr-control-item button{padding:5px 15px;background:var(--blue);color:#fff;border:none;border-radius:3px;cursor:pointer}
+        .sdr-control-item button:hover{background:#0056b3}
+        .sdr-control-item button:disabled{background:var(--gray);cursor:not-allowed}
+        #current-freq,#current-gain{color:var(--blue);font-weight:bold;margin-left:10px}
+        .rtl-tcp-controls{margin:15px 0;padding:15px;border:2px solid var(--blue);border-radius:5px;background:#e7f3ff}
+        .rtl-tcp-status{margin:10px 0;padding:8px;border-radius:4px;background:#d1ecf1;color:#0c5460;font-weight:bold;text-align:center}
+        .rtl-tcp-control-item{margin:10px 0;display:flex;align-items:center;gap:10px;justify-content:center}
+        .rtl-tcp-control-item label{min-width:140px;font-weight:bold}
+        .rtl-tcp-control-item select{width:150px;padding:5px;border:1px solid var(--border);border-radius:3px;background:#fff;cursor:pointer}
+        #current-rtl-channel{color:var(--blue);font-weight:bold;margin-left:10px}
+    </style>
+</head>
+<body>
+    <h1>Heimdall - RTL-SDR Cross-Correlation</h1>
+
+    <!-- KerberosSDR manual-calibration banner (hidden unless --kerberos) -->
+    <div id="kerberos-banner" style="display:none;margin:8px 0;padding:10px 14px;border-radius:6px;
+         font-weight:bold;border:1px solid #b33;background:#3a1515;color:#ffb3b3;"></div>
+    <div class="card"><strong>Config:</strong> <span id="config-info">Loading...</span></div>
+    
+    <div id="status" class="card status">Status: <span id="txt">Connecting...</span><div id="stats"></div></div>
+    
+    <div class="card control-section">
+        <h3>🔬 System Controls</h3>
+        <div class="control-group disabled" id="fft-control-group">
+            <h4>FFT Visualization</h4>
+            <div id="fft-status" class="fft-status fft-enabled"><span id="fft-txt">FFT: ENABLED</span></div>
+            <label class="chk"><input type="checkbox" id="fft-chk" autocomplete="off">Enable FFT Graphs</label>
+            <div class="info">Controls data visualization only</div>
+        </div>
+        
+        <div class="control-group disabled" id="bias-control-group">
+            <h4>⚡ Noise Source</h4>
+            <div id="bias-status" class="bias-status bias-enabled"><span id="bias-txt">Noise Source: ON</span></div>
+            <label class="chk"><input type="checkbox" id="bias-chk" autocomplete="off">Enable Noise Source</label>
+            <div class="info">Activates Noise Source</div>
+        </div>
+
+        <div class="control-group" id="biastee-control-group">
+            <h4>🔌 Antenna Bias Tees</h4>
+            <div id="biastee-checks"></div>
+            <div class="info">Powers active antennas: supplies DC on each antenna port (per channel). Remembered across restarts. Not available on the Wideband variant.</div>
+        </div>
+
+        <div class="control-group disabled" id="perbin-control-group">
+            <h4>🎚️ Per-Bin Phase Calibration</h4>
+            <div id="perbin-status" class="fft-status fft-disabled"><span id="perbin-txt">Per-Bin EQ: OFF</span></div>
+            <label class="chk"><input type="checkbox" id="perbin-chk" autocomplete="off">Enable Per-Bin EQ</label>
+            <div class="info">Higher phase accuracy across the full band (needs faster hardware). Toggling on triggers a recalibration.</div>
+        </div>
+
+        <div class="control-group" id="recal-control-group">
+            <h4>🔄 Periodic Calibration Check</h4>
+            <label class="chk"><input type="checkbox" id="recal-chk" autocomplete="off">Enable periodic check</label>
+            <div class="sdr-control-item" style="margin-top:8px">
+                <label>Every (minutes):</label>
+                <input type="number" id="recal-min-input" value="5" min="1" max="1440" step="1" style="width:80px">
+                <button id="recal-min-btn">Set</button>
+            </div>
+            <div style="margin-top:8px">
+                <button id="force-recal-btn">Force Recalibration Now</button>
+            </div>
+            <div class="info" style="margin-top:8px">Recalibrations triggered &mdash; bad lag: <b id="recal-lag-fails">0</b> &nbsp;|&nbsp; bad phase: <b id="recal-phase-fails">0</b></div>
+            <div class="info">Briefly pulses the noise source to verify lag/phase coherence; recalibrates if drifted</div>
+        </div>
+
+        <div class="control-group" id="sdr-control-group">
+            <h4>📡 SDR Settings</h4>
+            <div class="sdr-controls">
+                <div class="sdr-control-item">
+                    <label>Frequency (MHz):</label>
+                    <input type="number" id="freq-input" value="100" min="24" max="6668" step="0.1">
+                    <button id="freq-btn">Set</button>
+                    <span id="current-freq">Current: 100.0 MHz</span>
+                </div>
+                <div class="sdr-control-item">
+                    <label>Gain (dB):</label>
+                    <select id="gain-select" class="gain-select">
+                        <option value="auto">Auto</option>
+                        <option value="0">0.0 dB</option>
+                        <option value="0.9">0.9 dB</option>
+                        <option value="1.4">1.4 dB</option>
+                        <option value="2.7">2.7 dB</option>
+                        <option value="3.7">3.7 dB</option>
+                        <option value="7.7">7.7 dB</option>
+                        <option value="8.7">8.7 dB</option>
+                        <option value="12.5">12.5 dB</option>
+                        <option value="14.4">14.4 dB</option>
+                        <option value="15.7">15.7 dB</option>
+                        <option value="16.6">16.6 dB</option>
+                        <option value="19.7">19.7 dB</option>
+                        <option value="20.7">20.7 dB</option>
+                        <option value="22.9">22.9 dB</option>
+                        <option value="25.4">25.4 dB</option>
+                        <option value="28.0">28.0 dB</option>
+                        <option value="29.7">29.7 dB</option>
+                        <option value="32.8">32.8 dB</option>
+                        <option value="33.8">33.8 dB</option>
+                        <option value="36.4">36.4 dB</option>
+                        <option value="37.2">37.2 dB</option>
+                        <option value="38.6">38.6 dB</option>
+                        <option value="40.2">40.2 dB</option>
+                        <option value="42.1">42.1 dB</option>
+                        <option value="43.4">43.4 dB</option>
+                        <option value="43.9">43.9 dB</option>
+                        <option value="44.5">44.5 dB</option>
+                        <option value="48.0">48.0 dB</option>
+                        <option value="49.6" selected>49.6 dB</option>
+                    </select>
+                    <button id="gain-btn">Set</button>
+                    <span id="current-gain">Current: 49.6 dB</span>
+                </div>
+                <div class="info">Changing frequency or gain restarts calibration</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- NEW: RTL-TCP Channel Selection -->
+    <div class="card control-section">
+        <h3>📻 RTL-TCP Output Control</h3>
+        <div class="rtl-tcp-controls">
+            <div class="rtl-tcp-status">
+                <span id="rtl-tcp-status-text">RTL-TCP Server: Port 1234 (Channel 0)</span>
+            </div>
+            <div class="rtl-tcp-control-item">
+                <label>Source Channel:</label>
+                <select id="rtl-tcp-channel-select">
+                    <!-- Options will be populated by JavaScript based on NUM_DEVICES -->
+                </select>
+                <span id="current-rtl-channel">Streaming: Ch0 (Serial: 1000)</span>
+            </div>
+            <div class="info">Select which RTL-SDR channel to stream to RTL-TCP clients (SDR#, GQRX, etc.)</div>
+        </div>
+    </div>
+
+    <!-- Array element count (runtime reconfiguration) -->
+    <div class="card control-section">
+        <h3>📡 Array Elements</h3>
+        <div class="rtl-tcp-controls">
+            <div class="rtl-tcp-control-item">
+                <label>Active Elements:</label>
+                <select id="num-elements-select">
+                    <!-- Options populated by JavaScript from the server's max_elements -->
+                </select>
+                <span id="num-elements-status"></span>
+            </div>
+            <div class="info">Number of coherent channels in use. Changing it closes and reopens the
+                RTL-SDR devices and runs a full recalibration (~30-60 s). Devices beyond the
+                selected count are released on the USB bus for use by other programs.
+                Selecting more channels than are physically attached fails and rolls back.</div>
+            <div class="info">Hardware notes: KrakenSDR has 5 elements. KerberosSDR (4 elements,
+                no noise-source switch) should be run with the <code>--kerberos</code> flag;
+                a KerberosSDR modified with CKOVAL antenna switches with
+                <code>--kerberos_sw</code>.</div>
+        </div>
+    </div>
+
+    <!-- Forward Phase Compensation (S2P) -->
+    <div class="card control-section" id="fwdcomp-card">
+        <h3>🧮 Forward Phase Compensation (S2P)</h3>
+        <div id="fwdcomp-status" class="fft-status fft-disabled"><span id="fwdcomp-txt">Forward Comp: OFF</span></div>
+        <label class="chk"><input type="checkbox" id="fwdcomp-chk" autocomplete="off">Enable forward compensation</label>
+        <label class="chk" style="margin-left:18px"><input type="checkbox" id="fwdcomp-amp-chk" autocomplete="off" checked>Correct amplitude (uncheck for phase-only)</label>
+        <div class="info" style="margin:8px 0">
+            VNA-measure each antenna chain (cable / filter / LNA) as a 2-port Touchstone <code>.s2p</code> file, then upload the files below
+            (they are stored in the <code id="fwdcomp-dir">s2p_calibration/</code> folder on the receiver). Pick one file per channel. The
+            forward-transmission <b>S21</b> phase (and amplitude) is calibrated out relative to the reference channel at the tuned frequency
+            &mdash; this corrects the components in front of the KrakenSDR that the noise-source calibration cannot see. Re-interpolated
+            automatically when you change frequency.
+        </div>
+        <div style="margin:8px 0">
+            <input type="file" id="fwdcomp-file" accept=".s2p,.s1p" multiple>
+            <button id="fwdcomp-upload-btn">⬆ Upload</button>
+            <span id="fwdcomp-upload-msg" style="margin-left:8px"></span>
+        </div>
+        <div id="fwdcomp-rows" class="sdr-controls"></div>
+        <div id="fwdcomp-files-list" style="margin-top:10px"></div>
+        <div style="margin-top:10px"><button id="fwdcomp-rescan-btn">↻ Rescan folder</button></div>
+    </div>
+
+    <div class="card">
+        <h3>🎯 Compensation Status</h3>
+        <div id="comp-status" class="comp-inactive"><strong>Status:</strong> <span id="comp-txt">Waiting...</span></div>
+        <table><colgroup><col style="width:8%"><col style="width:14%"><col style="width:18%"><col style="width:12%"><col style="width:14%"><col style="width:34%"></colgroup><thead><tr><th>Ch</th><th>Lag</th><th>State</th><th>Count</th><th>Phase</th><th>Status</th></tr></thead><tbody id="tbody"></tbody></table>
+        <div style="text-align:center;margin-top:15px;">
+            <button id="reset-lag-btn" style="padding:8px 20px;background:#dc3545;color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:bold;font-size:14px;">
+                🔄 Reset Lag Compensation
+            </button>
+            <div class="info" style="margin-top:8px;">Unlocks and resets lag compensation for all channels (use if drift is detected)</div>
+        </div>
+    </div>
+    
+    <div class="card">
+        <h3>📈 Phase History</h3>
+        <div class="plot"><div class="plot-title">Phase Offset Over Time (degrees)</div><div id="phase-plot"></div></div>
+        <div id="phase-info" class="info">Phase measurements over time</div>
+    </div>
+    
+    <div class="info">Real-time cross-correlation with auto compensation</div>
+    <div id="plots" class="plots"></div>
+    <div class="info">Click and drag on graphs to zoom • Double-click to reset zoom</div>
+    
+    <script>
+        const parseTemplateVar = (t, f) => {
+            if (typeof t === 'string' && t.includes('{{')) return f;
+            const p = parseInt(t);
+            return isNaN(p) ? f : p;
+        };
+        
+        const ND = parseTemplateVar('{{NUM_DEVICES}}', 4);
+        const CS = parseTemplateVar('{{CORRELATION_SIZE}}', 512);
+        const RC = parseTemplateVar('{{REF_CHANNEL}}', 0);
+        const STATES = ['MEASURING', 'SERVO', 'CONVERGED'];
+        // Substituted by html_loader with the runtime serial list (--serials
+        // aware); the ternary keeps the page parseable if served unsubstituted.
+        const SERIALS_RAW = '{{SERIALS}}';
+        const EXPECTED_SERIALS = SERIALS_RAW.includes('{{')
+            ? ["1000", "1001", "1002", "1003", "1004"] : JSON.parse(SERIALS_RAW);
+        
+        let ws = null, cPlots = [], pPlot = null, pData = [], pHist = [], fCnt = 0, lTime = Date.now();
+        let pData2 = [], compActive = 0, pTrack = 0, fftOn = 1, fftAuto = 0, userForce = 0, pending = null, pTO = null;
+        let biasOn = 1, biasPending = null, biasTO = null, calibrationActive = 1, controlsEnabled = 0;
+        let perBinOn = 0, perBinPending = null, perBinTO = null;
+        let biasTeeMask = 0, biasTeeHoldUntil = 0;  // antenna bias tees (bit N = channel N)
+        let currentFreq = 100.0, currentGain = 49.6;
+        let lastServerGain = 49.6;  // Track last known server gain to avoid unnecessary updates
+        let initialStateReceived = false;  // Track if we've received initial state from server
+        let currentRtlTcpChannel = 0;  // Track current RTL-TCP channel
+        let activeElements = ND;  // Runtime: synced from server (may be less than ND)
+        
+        // Store zoom states for each correlation plot
+        let plotZoomStates = [];
+        
+        const log = m => console.log(`[${new Date().toISOString().substr(11,8)}] ${m}`);
+        const $ = id => document.getElementById(id);
+        
+        // Initialize gain display based on config (moved after $ is defined)
+        const initGainSelect = $('gain-select');
+        if (initGainSelect && initGainSelect.value === 'auto') {
+            $('current-gain').textContent = 'Current: Auto';
+            currentGain = -1;
+            lastServerGain = -1;
+        }
+        
+        // Initialize RTL-TCP channel selector
+        const initRtlTcpChannelSelect = () => {
+            const select = $('rtl-tcp-channel-select');
+            select.innerHTML = '';
+            for (let i = 0; i < activeElements; i++) {
+                const option = document.createElement('option');
+                option.value = i;
+                const serial = i < EXPECTED_SERIALS.length ? EXPECTED_SERIALS[i] : 'Unknown';
+                option.textContent = `Channel ${i} (Serial: ${serial})`;
+                if (i === 0) option.selected = true;  // Default to channel 0
+                select.appendChild(option);
+            }
+
+            // Add change event listener
+            select.addEventListener('change', handleRtlTcpChannelChange);
+
+            // Update status display
+            updateRtlTcpStatus(0);
+        };
+        
+        const handleRtlTcpChannelChange = () => {
+            const select = $('rtl-tcp-channel-select');
+            const newChannel = parseInt(select.value);
+            
+            if (ws?.readyState === 1) {
+                ws.send(`RTL_TCP_CHANNEL:${newChannel}`);
+                log(`RTL-TCP channel change requested: ${newChannel}`);
+                
+                // Update status optimistically
+                currentRtlTcpChannel = newChannel;
+                updateRtlTcpStatus(newChannel);
+            } else {
+                // Revert selection if not connected
+                select.value = currentRtlTcpChannel;
+            }
+        };
+        
+        const updateRtlTcpStatus = (channel) => {
+            const serial = channel < EXPECTED_SERIALS.length ? EXPECTED_SERIALS[channel] : 'Unknown';
+            $('rtl-tcp-status-text').textContent = `RTL-TCP Server: Port 1234 (Channel ${channel})`;
+            $('current-rtl-channel').textContent = `Streaming: Ch${channel} (Serial: ${serial})`;
+        };
+
+        // ---- Array element count (runtime reconfiguration) ----
+        let maxElements = ND;          // Overwritten by the server's STATE broadcast
+        let reconfiguring = false;
+
+        const initNumElementsSelect = () => {
+            const select = $('num-elements-select');
+            select.innerHTML = '';
+            for (let n = 2; n <= maxElements; n++) {
+                const option = document.createElement('option');
+                option.value = n;
+                option.textContent = `${n} elements`;
+                select.appendChild(option);
+            }
+            select.value = activeElements;
+        };
+
+        const handleNumElementsChange = () => {
+            const select = $('num-elements-select');
+            const n = parseInt(select.value);
+            if (n === activeElements) return;
+            if (ws?.readyState !== 1) { select.value = activeElements; return; }
+            const ok = confirm(
+                `Change the array to ${n} elements?\n\n` +
+                `All RTL-SDR devices will close and reopen, followed by a full ` +
+                `recalibration (~30-60 s). DF output is invalid until it completes.\n\n` +
+                `Devices beyond channel ${n - 1} are released for use by other programs.`);
+            if (!ok) { select.value = activeElements; return; }
+            ws.send(`NUM_ELEMENTS:${n}`);
+            $('num-elements-status').textContent = 'Reconfiguring…';
+            select.disabled = true;
+            log(`Element-count change requested: ${n}`);
+        };
+
+        const applyElementsState = st => {
+            if (Number.isFinite(st.max_elements) && st.max_elements >= 2 && st.max_elements !== maxElements) {
+                maxElements = st.max_elements;
+                initNumElementsSelect();
+            }
+            const select = $('num-elements-select');
+            if (typeof st.reconfiguring === 'boolean') {
+                reconfiguring = st.reconfiguring;
+                select.disabled = reconfiguring;
+                if (!reconfiguring && $('num-elements-status').textContent === 'Reconfiguring…')
+                    $('num-elements-status').textContent = '';
+            }
+            if (Number.isFinite(st.num_elements) && !reconfiguring &&
+                document.activeElement !== select) {
+                select.value = st.num_elements;
+            }
+        };
+        
+        document.getElementById('config-info').textContent = `${activeElements} devices, Ref Ch${RC}, ${CS}pt FFT`;
+        
+        const updateFFT = (on, auto, over) => {
+            if (pending) {
+                if (on === pending.enabled) {
+                    log(`FFT confirmed ${on}`);
+                    clearTimeout(pTO);
+                    pending = pTO = null;
+                } else return;
+            }
+            
+            const [was, wasAuto] = [fftOn, fftAuto];
+            [fftOn, fftAuto] = [on, auto];
+            
+            // Handle phase tracking based on FFT state
+            if (on && !was) {
+                // FFT turned on
+                if (controlsEnabled) {
+                    // Only enable tracking if controls are enabled (calibration complete)
+                    pTrack = 1;
+                    $('phase-info').innerHTML = `Tracking resumed | ${pHist.length}/100`;
+                    log('FFT enabled - phase tracking started');
+                }
+            } else if (!on && was) {
+                // FFT turned off
+                pTrack = 0;
+                const reason = auto ? 'calibration complete' : 'user disabled';
+                $('phase-info').innerHTML = `Tracking stopped - ${reason} | ${pHist.length}/100`;
+                log(`FFT disabled - phase tracking stopped (${reason})`);
+            }
+            
+            const chk = $('fft-chk');
+            if (chk.checked !== on && controlsEnabled) {
+                chk.removeEventListener('change', handleFFTChk);
+                chk.checked = on;
+                chk.addEventListener('change', handleFFTChk);
+            }
+            updateFFTText(on, auto, over);
+            
+            // Enable controls when FFT auto-disables after calibration
+            if (auto && !on && !controlsEnabled) {
+                updateControls(true);
+                log('Controls enabled - calibration complete, FFT auto-disabled');
+            }
+        };
+
+        
+        
+        const updateFFTText = (on, auto, over) => {
+            const [d, t] = [$('fft-status'), $('fft-txt')];
+            if (pending) {
+                d.className = 'fft-status fft-auto-disabled';
+                t.textContent = `FFT: ${pending.enabled ? 'ENABLING' : 'DISABLING'}...`;
+            } else if (on) {
+                d.className = 'fft-status fft-enabled';
+                t.textContent = over ? 'FFT: ON (User Override)' : 'FFT: ON';
+            } else if (auto) {
+                d.className = 'fft-status fft-auto-disabled';
+                t.textContent = 'FFT: OFF (Calibration Complete)';
+            } else {
+                d.className = 'fft-status fft-disabled';
+                t.textContent = 'FFT: OFF';
+            }
+        };        
+
+        
+        const updateBiasText = (on) => {
+            const [d, t] = [$('bias-status'), $('bias-txt')];
+            if (biasPending) {
+                d.className = 'bias-status fft-auto-disabled';
+                t.textContent = `Noise Source: ${biasPending.enabled ? 'ENABLING' : 'DISABLING'}...`;
+            } else {
+                d.className = on ? 'bias-status bias-enabled' : 'bias-status bias-disabled';
+                t.textContent = on ? 'Noise Source: ON' : 'Noise Source: OFF';
+            }
+        };
+        
+        const updateControls = (enabled) => {
+            controlsEnabled = enabled;
+            const [fftGroup, biasGroup, perBinGroup] = [$('fft-control-group'), $('bias-control-group'), $('perbin-control-group')];
+            const [fftChk, biasChk, perBinChk] = [$('fft-chk'), $('bias-chk'), $('perbin-chk')];
+
+            if (enabled) {
+                fftGroup.classList.remove('disabled');
+                biasGroup.classList.remove('disabled');
+                perBinGroup.classList.remove('disabled');
+                fftChk.disabled = false;
+                biasChk.disabled = false;
+                perBinChk.disabled = false;
+            } else {
+                fftGroup.classList.add('disabled');
+                biasGroup.classList.add('disabled');
+                perBinGroup.classList.add('disabled');
+                fftChk.disabled = true;
+                biasChk.disabled = true;
+                perBinChk.disabled = true;
+            }
+        };
+        
+        const updateBias = (on) => {
+            if (biasPending) {
+                if (on === biasPending.enabled) {
+                    log(`Noise Source confirmed ${on}`);
+                    clearTimeout(biasTO);
+                    biasPending = biasTO = null;
+                } else return;
+            }
+            biasOn = on;
+            const chk = $('bias-chk');
+            if (chk.checked !== on && controlsEnabled) {
+                chk.removeEventListener('change', handleBiasChk);
+                chk.checked = on;
+                chk.addEventListener('change', handleBiasChk);
+            }
+            updateBiasText(on);
+        };
+        
+        const handleFFTChk = e => {
+            if (!controlsEnabled) {
+                e.target.checked = fftOn;
+                return;
+            }
+            
+            const on = e.target.checked;
+            
+            if (ws?.readyState === 1) {
+                pending = { enabled: on, timestamp: Date.now() };
+                clearTimeout(pTO);
+                pTO = setTimeout(() => pending = pTO = null, 2000);
+                ws.send(on ? 'FFT_ENABLE' : 'FFT_DISABLE');
+                updateFFTText(on, 0, 0);
+                
+                if (on) {
+                    // User manually enabled FFT - set user override and enable tracking
+                    userForce = 1;
+                    pTrack = 1;
+                    $('phase-info').innerHTML = `Tracking enabled by user | ${pHist.length}/100`;
+                    log('User enabled FFT - starting all measurements and graphs');
+                } else {
+                    // User manually disabled FFT - stop tracking
+                    userForce = 0;
+                    pTrack = 0;
+                    $('phase-info').innerHTML = `Tracking stopped by user | ${pHist.length}/100`;
+                    log('User disabled FFT - stopping all measurements and graphs');
+                }
+            } else {
+                e.target.checked = fftOn;
+            }
+        };
+
+        
+        const handleBiasChk = e => {
+            if (!controlsEnabled) {
+                e.target.checked = biasOn;
+                return;
+            }
+            const on = e.target.checked;
+            if (ws?.readyState === 1) {
+                biasPending = { enabled: on, timestamp: Date.now() };
+                clearTimeout(biasTO);
+                biasTO = setTimeout(() => biasPending = biasTO = null, 2000);
+                ws.send(on ? 'BIAS_TEE_ENABLE' : 'BIAS_TEE_DISABLE');
+                updateBiasText(on);
+            } else e.target.checked = biasOn;
+        };
+
+        const updatePerBinText = (on) => {
+            const [d, t] = [$('perbin-status'), $('perbin-txt')];
+            if (perBinPending) {
+                d.className = 'fft-status fft-auto-disabled';
+                t.textContent = `Per-Bin EQ: ${perBinPending.enabled ? 'ENABLING' : 'DISABLING'}...`;
+            } else {
+                d.className = on ? 'fft-status fft-enabled' : 'fft-status fft-disabled';
+                t.textContent = on ? 'Per-Bin EQ: ON' : 'Per-Bin EQ: OFF';
+            }
+        };
+
+        const updatePerBin = (on) => {
+            if (perBinPending) {
+                if (on === perBinPending.enabled) {
+                    log(`Per-Bin EQ confirmed ${on}`);
+                    clearTimeout(perBinTO);
+                    perBinPending = perBinTO = null;
+                } else return;
+            }
+            perBinOn = on;
+            const chk = $('perbin-chk');
+            if (chk.checked !== on && controlsEnabled) {
+                chk.removeEventListener('change', handlePerBinChk);
+                chk.checked = on;
+                chk.addEventListener('change', handlePerBinChk);
+            }
+            updatePerBinText(on);
+        };
+
+        const handlePerBinChk = e => {
+            if (!controlsEnabled) {
+                e.target.checked = perBinOn;
+                return;
+            }
+            const on = e.target.checked;
+            if (ws?.readyState === 1) {
+                perBinPending = { enabled: on, timestamp: Date.now() };
+                clearTimeout(perBinTO);
+                // Longer timeout: enabling triggers a recalibration before the
+                // server reports the new state back.
+                perBinTO = setTimeout(() => perBinPending = perBinTO = null, 5000);
+                ws.send(on ? 'PER_BIN_ENABLE' : 'PER_BIN_DISABLE');
+                updatePerBinText(on);
+                if (on) log('Per-Bin EQ enabled - recalibration will run to build the equalizer');
+                else log('Per-Bin EQ disabled');
+            } else e.target.checked = perBinOn;
+        };
+
+        // Antenna bias tees: per-channel checkboxes -> ANT_BIAS_MASK:<bitmask>
+        // (bit N = channel N). State comes back in the periodic STATE message;
+        // ignore it briefly after a click so a stale broadcast can't revert it.
+        const applyBiasTeeMask = mask => {
+            biasTeeMask = mask;
+            for (let ch = 0; ch < activeElements; ch++) {
+                const cb = $(`biastee-chk-${ch}`);
+                if (cb) cb.checked = ((mask >> ch) & 1) === 1;
+            }
+        };
+
+        const handleBiasTeeChk = () => {
+            let mask = 0;
+            for (let ch = 0; ch < activeElements; ch++) {
+                if ($(`biastee-chk-${ch}`)?.checked) mask |= 1 << ch;
+            }
+            if (ws?.readyState === 1) {
+                biasTeeMask = mask;
+                biasTeeHoldUntil = Date.now() + 2000;
+                ws.send(`ANT_BIAS_MASK:${mask}`);
+                log(`Antenna bias tees set (mask ${mask})`);
+            } else applyBiasTeeMask(biasTeeMask);  // not connected: revert
+        };
+
+        const initBiasTees = () => {
+            const cont = $('biastee-checks');
+            cont.innerHTML = '';
+            for (let ch = 0; ch < activeElements; ch++) {
+                const label = document.createElement('label');
+                label.className = 'chk';
+                label.style.marginRight = '14px';
+                const cb = document.createElement('input');
+                cb.type = 'checkbox';
+                cb.autocomplete = 'off';
+                cb.id = `biastee-chk-${ch}`;
+                cb.checked = ((biasTeeMask >> ch) & 1) === 1;
+                cb.addEventListener('change', handleBiasTeeChk);
+                label.appendChild(cb);
+                label.appendChild(document.createTextNode(`Ch ${ch}`));
+                cont.appendChild(label);
+            }
+        };
+
+        const initPhase = () => {
+            // Clear existing plot
+            $('phase-plot').innerHTML = '';
+            pData = [];
+            pHist = [];
+
+            const indices = Array.from({ length: 100 }, (_, i) => i);
+            pData = [indices];
+            for (let ch = 0; ch < activeElements; ch++) {
+                if (ch !== RC) pData.push(new Array(100).fill(null));
+            }
+
+            const series = [{}];
+            for (let ch = 0; ch < activeElements; ch++) {
+                if (ch !== RC) {
+                    const hue = (ch * 60) % 360;
+                    series.push({
+                        label: `Ch${ch}`,
+                        stroke: `hsl(${hue},70%,50%)`,
+                        width: 2,
+                        points: { show: 1, fill: `hsl(${hue},70%,50%)`, stroke: '#fff', width: 1, size: 4 }
+                    });
+                }
+            }
+
+            pPlot = new uPlot({
+                width: 800, height: 300, padding: [10, 10, 10, 10],
+                scales: {
+                    x: { label: 'Sample', font: '12px Arial', range: [0, 99] },
+                    y: { label: 'Phase (°)', font: '12px Arial', range: [-180, 180] }
+                },
+                axes: [
+                    { font: '11px Arial', size: 25, stroke: '#666', ticks: { show: 1, stroke: '#eee', width: 1 } },
+                    { font: '11px Arial', size: 50, stroke: '#666', ticks: { show: 1, stroke: '#eee', width: 1 } }
+                ],
+                series, legend: { show: 1, live: 0 }
+            }, pData, $('phase-plot'));
+        };
+        
+        const updateTable = (lags, phases, cData, active) => {
+            const [sd, st] = [$('comp-status'), $('comp-txt')];
+            if (active) {
+                sd.className = 'comp-active';
+                st.textContent = 'COMPENSATION ACTIVE';
+                calibrationActive = 1;
+            } else {
+                sd.className = 'comp-inactive';
+                st.textContent = 'All stable';
+                calibrationActive = 0;
+            }
+            
+            let [anyConv, phaseComp, allComp] = [0, 0, 1];
+            for (let ch = 0; ch < activeElements; ch++) {
+                if (ch === RC) continue;
+                const [lag, phase] = [lags[ch] || 0, phases[ch] || 0];
+                const cd = cData[ch] || { state_code: 0, zero_lag_count: 0, converged: 0 };
+                const [si, ps] = [cd.status_info || 0, (cd.status_info || 0) & 0xFF];
+                const chComp = ps >= 10;
+                phaseComp = phaseComp || chComp;
+                if (!chComp) allComp = 0;
+                if (cd.converged) anyConv = 1;
+
+                const [lEl, sEl, cEl, pEl, stEl] = [`l${ch}`, `s${ch}`, `c${ch}`, `p${ch}`, `st${ch}`].map($);
+                if (!lEl) continue;  // Skip if element doesn't exist (element count mismatch)
+                lEl.textContent = lag.toFixed(2);
+                lEl.className = lag > 0.5 ? 'l1' : lag < -0.5 ? 'l-1' : 'l0';
+                const sn = STATES[cd.state_code] || 'UNKNOWN';
+                sEl.textContent = sn;
+                sEl.className = 's' + cd.state_code;
+                cEl.textContent = cd.zero_lag_count;
+                pEl.textContent = phase.toFixed(1);
+
+                if (ps >= 10) {
+                    stEl.textContent = '✅ CALIBRATED';
+                    Object.assign(stEl.style, { color: '#28a745', fontWeight: 'bold' });
+                } else if (ps >= 5) {
+                    stEl.textContent = '🔄 Phase...';
+                    stEl.style.color = '#007bff';
+                } else if (cd.converged) {
+                    stEl.textContent = '✅ LAG OK';
+                    Object.assign(stEl.style, { color: '#28a745', fontWeight: 'bold' });
+                } else if (sn === 'SERVO') {
+                    stEl.textContent = '🎛️ Servo...';
+                    stEl.style.color = '#6f42c1';
+                } else {
+                    stEl.textContent = '📊 Measuring';
+                    stEl.style.color = '#ffc107';
+                }
+            }
+            
+            // Phase tracking is ONLY controlled by user FFT checkbox after calibration
+            // During calibration, it follows the compensation activity
+            if (allComp && !calibrationActive) {
+                // Calibration complete - tracking only if user has enabled FFT
+                if (!pTrack && fftOn) {
+                    pTrack = 1;
+                    $('phase-info').innerHTML = `Tracking enabled by user | ${pHist.length}/100`;
+                } else if (pTrack && !fftOn) {
+                    pTrack = 0;
+                    $('phase-info').innerHTML = `Tracking stopped - calibration complete | ${pHist.length}/100`;
+                }
+            } else if (calibrationActive) {
+                // During calibration, enable tracking if FFT is on
+                if (!pTrack && fftOn) {
+                    pTrack = 1;
+                    $('phase-info').innerHTML = `Tracking enabled - calibrating | ${pHist.length}/100`;
+                }
+            }
+        };
+        
+        const updatePhase = phases => {
+            if (!pPlot || !pTrack || !fftOn) return;
+            const entry = { timestamp: Date.now(), phases: {} };
+            for (let ch = 0; ch < activeElements; ch++) {
+                if (ch !== RC) entry.phases[ch] = phases[ch] || 0;
+            }
+            pHist.push(entry);
+            if (pHist.length > 100) pHist.shift();
+
+            const hl = pHist.length;
+            pData[0] = Array.from({ length: hl }, (_, i) => i);
+
+            let [min, max, si] = [Infinity, -Infinity, 1];
+            for (let ch = 0; ch < activeElements; ch++) {
+                if (ch !== RC) {
+                    const cPhases = pHist.map(e => e.phases[ch] || 0);
+                    cPhases.forEach(p => {
+                        if (p !== null && !isNaN(p)) {
+                            min = Math.min(min, p);
+                            max = Math.max(max, p);
+                        }
+                    });
+                    
+                    if (cPhases.length < 100) {
+                        const pad = new Array(100 - cPhases.length).fill(null);
+                        pData[si] = [...pad, ...cPhases];
+                        if (si === 1) pData[0] = Array.from({ length: 100 }, (_, i) => i - (100 - hl));
+                    } else pData[si] = cPhases;
+                    si++;
+                }
+            }
+            
+            if (min !== Infinity && max !== -Infinity) {
+                const range = max - min, pad = Math.max(range * 0.15, 2), minR = 10;
+                let [yMin, yMax] = [min - pad, max + pad];
+                if (yMax - yMin < minR) {
+                    const c = (yMin + yMax) / 2;
+                    [yMin, yMax] = [c - minR / 2, c + minR / 2];
+                }
+                pPlot.setScale('y', { min: yMin, max: yMax });
+            } else pPlot.setScale('y', { min: -10, max: 10 });
+            
+            pPlot.setData(pData);
+
+            const nrp = [];
+            for (let ch = 0; ch < activeElements; ch++) {
+                if (ch !== RC) nrp.push(`Ch${ch}:${(phases[ch] || 0).toFixed(1)}°`);
+            }
+            const rt = min !== Infinity && max !== -Infinity ? ` | Range:${min.toFixed(1)}°-${max.toFixed(1)}°` : '';
+            $('phase-info').innerHTML = `${nrp.join(', ')} | Samples:${hl}/100${rt}`;
+        };
+        
+        const initCorr = () => {
+            // Clear existing plots
+            $('plots').innerHTML = '';
+            cPlots = [];
+            pData2 = [];
+            plotZoomStates = [];
+
+            for (let ch = 0; ch < activeElements; ch++) {
+                if (ch === RC) continue;
+                const div = document.createElement('div');
+                div.className = 'plot';
+                div.innerHTML = `<div class="plot-title">Ch${RC}→Ch${ch}</div><div></div>`;
+                $('plots').appendChild(div);
+                
+                // Create initial empty data
+                const data = [[], []];
+                pData2.push(data);
+                
+                // Initialize zoom state for this plot
+                plotZoomStates.push({ 
+                    isZoomed: false, 
+                    xMin: null, 
+                    xMax: null 
+                });
+                const plotIdx = plotZoomStates.length - 1;
+                
+                const plot = new uPlot({
+                    width: 700, height: 350, padding: [10, 10, 10, 10],
+                    scales: {
+                        x: { time: 0, label: 'Lag', font: '12px Arial' },
+                        y: { label: 'Correlation', font: '12px Arial', range: [0, 255] }
+                    },
+                    axes: [
+                        { font: '11px Arial', size: 25, stroke: '#666' },
+                        { font: '11px Arial', size: 40, stroke: '#666', values: (u, vals) => vals.map(v => (v / 255).toFixed(1)) }
+                    ],
+                    series: [
+                        {},
+                        { stroke: `hsl(${ch * 60},70%,50%)`, width: 2, fill: `hsla(${ch * 60},70%,50%,0.1)` }
+                    ],
+                    legend: { show: 0 },
+                    cursor: {
+                        drag: {
+                            x: true,
+                            y: false,
+                            setScale: true
+                        }
+                    },
+                    hooks: {
+                        ready: [
+                            u => {
+                                // Add double-click to reset zoom
+                                u.over.addEventListener('dblclick', e => {
+                                    plotZoomStates[plotIdx].isZoomed = false;
+                                    plotZoomStates[plotIdx].xMin = null;
+                                    plotZoomStates[plotIdx].xMax = null;
+                                    
+                                    const xData = u.data[0];
+                                    if (xData && xData.length > 0) {
+                                        u.setScale('x', {
+                                            min: Math.min(...xData),
+                                            max: Math.max(...xData)
+                                        });
+                                    }
+                                });
+                            }
+                        ],
+                        setScale: [
+                            (u, key) => {
+                                // Track zoom state when scale changes
+                                if (key === 'x') {
+                                    const scale = u.scales.x;
+                                    const xData = u.data[0];
+                                    if (xData && xData.length > 0) {
+                                        const dataMin = Math.min(...xData);
+                                        const dataMax = Math.max(...xData);
+                                        
+                                        // Check if zoomed (scale doesn't match full data range)
+                                        if (Math.abs(scale.min - dataMin) > 0.1 || Math.abs(scale.max - dataMax) > 0.1) {
+                                            plotZoomStates[plotIdx].isZoomed = true;
+                                            plotZoomStates[plotIdx].xMin = scale.min;
+                                            plotZoomStates[plotIdx].xMax = scale.max;
+                                        }
+                                    }
+                                }
+                            }
+                        ]
+                    }
+                }, data, div.lastElementChild);
+                cPlots.push(plot);
+            }
+        };
+        
+        const initTable = () => {
+            const tb = $('tbody');
+            tb.innerHTML = '';
+            for (let ch = 0; ch < activeElements; ch++) {
+                if (ch === RC) continue;
+                const row = document.createElement('tr');
+                row.innerHTML = `<td><b>Ch${ch}</b></td><td id="l${ch}" class="l0">0</td><td id="s${ch}" class="s0">MEASURING</td><td id="c${ch}">0</td><td id="p${ch}">0</td><td id="st${ch}">Init...</td>`;
+                tb.appendChild(row);
+            }
+        };
+        
+        const connect = () => {
+            const url = `ws://${location.hostname || 'localhost'}:${location.port || 8080}/ws`;
+            ws = new WebSocket(url);
+            ws.binaryType = 'arraybuffer';
+            
+            ws.onopen = () => {
+                $('txt').textContent = 'Connected';
+                $('txt').className = 'connected';
+                pending = pTO = null;
+                biasPending = biasTO = null;
+                initialStateReceived = false;  // Reset on new connection
+            };
+            ws.onclose = () => {
+                $('txt').textContent = 'Disconnected';
+                $('txt').className = 'error';
+                initialStateReceived = false;  // Reset on disconnect
+                setTimeout(connect, 2000);
+            };
+            ws.onerror = e => console.error('WS error:', e);
+            ws.onmessage = e => {
+                // The broadcast feed is BINARY (ArrayBuffer); periodic-recal state
+                // sync arrives as a TEXT frame (string) -> branch on the type.
+                if (typeof e.data === 'string') handleTextMessage(e.data);
+                else processData(e.data);
+            };
+        };
+
+        const applyRecalState = st => {
+            const chk = $('recal-chk');
+            if (chk && st.periodic_recal_enabled !== undefined) chk.checked = !!st.periodic_recal_enabled;
+            // Only sync the minutes box when the user is not actively editing it.
+            const min = $('recal-min-input');
+            if (min && document.activeElement !== min &&
+                Number.isFinite(st.periodic_recal_minutes) && st.periodic_recal_minutes > 0)
+                min.value = st.periodic_recal_minutes;
+            if (Number.isFinite(st.recal_lag_fails)) $('recal-lag-fails').textContent = st.recal_lag_fails;
+            if (Number.isFinite(st.recal_phase_fails)) $('recal-phase-fails').textContent = st.recal_phase_fails;
+        };
+
+        // --- KerberosSDR manual-calibration mode (STATE.kerberos_mode) ---
+        let kerberosMode = false, kerberosSw = false;
+        const applyKerberosState = st => {
+            if (typeof st.kerberos_mode !== 'boolean') return;
+            kerberosMode = st.kerberos_mode;
+            kerberosSw = !!st.kerberos_sw;
+            const banner = $('kerberos-banner');
+            if (!kerberosMode) { banner.style.display = 'none'; return; }
+            const cal = st.calibration_state || 'uncalibrated';
+            let text, bg, border, color;
+            if (kerberosSw) {
+                // CKOVAL switches: calibration is automatic again - just show
+                // the mode and the live calibration state.
+                text = '🔀 KerberosSDR (CKOVAL antenna switches): automatic calibration - state: ' + cal + '.';
+                bg = '#13233a'; border = '#2c5aa8'; color = '#a8c8f0';
+            } else if (cal === 'calibrated') {
+                text = '✅ KerberosSDR: calibrated. A frequency or gain change will make the calibration stale.';
+                bg = '#15321a'; border = '#2c7a3f'; color = '#a8e6b3';
+            } else if (cal === 'calibrating') {
+                text = '⏳ KerberosSDR: CALIBRATING - keep all antennas DISCONNECTED until calibration completes (~30-60 s).';
+                bg = '#333013'; border = '#a89b2c'; color = '#f0e68c';
+            } else if (cal === 'stale') {
+                text = '⚠️ KerberosSDR: calibration is STALE (settings changed since calibrating). ' +
+                       'DoA output is unreliable - disconnect ALL antennas, press "Force Recalibration Now", ' +
+                       'then reconnect the antennas.';
+                bg = '#3a2a10'; border = '#b3822c'; color = '#ffd9a0';
+            } else {
+                text = '🚨 KerberosSDR: UNCALIBRATED - DoA output is invalid. Disconnect ALL antennas, ' +
+                       'press "Force Recalibration Now", then reconnect the antennas once calibrated.';
+                bg = '#3a1515'; border = '#b33'; color = '#ffb3b3';
+            }
+            banner.textContent = text;
+            banner.style.background = bg;
+            banner.style.borderColor = border;
+            banner.style.color = color;
+            banner.style.display = 'block';
+
+            // Plain --kerberos: periodic checks would energize the noise source
+            // with antennas connected - the backend never runs them; grey out
+            // the controls so the UI doesn't suggest otherwise.
+            const manualOnly = kerberosMode && !kerberosSw;
+            ['recal-chk', 'recal-min-input', 'recal-min-btn'].forEach(id => {
+                const el = $(id);
+                if (el) {
+                    el.disabled = manualOnly;
+                    el.title = manualOnly ? 'Disabled in KerberosSDR mode (manual calibration only)' : '';
+                }
+            });
+        };
+
+        const handleTextMessage = msg => {
+            if (msg.startsWith('STATE:')) {
+                try {
+                    const st = JSON.parse(msg.slice(6));
+                    applyRecalState(st);
+                    applyFwdCompState(st);
+                    applyElementsState(st);
+                    applyKerberosState(st);
+                    if (Number.isFinite(st.antenna_bias_tee_mask) && Date.now() >= biasTeeHoldUntil)
+                        applyBiasTeeMask(st.antenna_bias_tee_mask);
+                } catch (err) { console.error('Bad STATE message', err); }
+            }
+        };
+
+        const processData = data => {
+            const v = new DataView(data);
+            let o = 0;
+            const [nCorr, cSize, refCh, nDev, compAct, biasState, perBinState] = [
+                v.getUint32(o, 1), v.getUint32(o += 4, 1), v.getUint32(o += 4, 1),
+                v.getUint32(o += 4, 1), v.getUint32(o += 4, 1), v.getUint32(o += 4, 1),
+                v.getUint32(o += 4, 1)
+            ];
+            o += 4;
+            
+            // Read frequency, gain, and RTL-TCP channel data
+            const freqMhz = v.getFloat32(o, 1); o += 4;
+            const gainDb = v.getFloat32(o, 1); o += 4;
+            const rtlTcpChannel = v.getUint32(o, 1); o += 4;
+            
+            // Update current values and UI
+            if (freqMhz > 0) {
+                currentFreq = freqMhz;
+                $('current-freq').textContent = `Current: ${freqMhz.toFixed(1)} MHz`;
+            }
+            
+            // Handle gain updates - only update dropdown if server value changed
+            if (gainDb < 0) {
+                // Auto gain mode
+                currentGain = -1;
+                $('current-gain').textContent = `Current: Auto`;
+                
+                // Only update dropdown if server value changed
+                if (lastServerGain !== -1) {
+                    $('gain-select').value = 'auto';
+                    lastServerGain = -1;
+                }
+            } else if (gainDb >= 0) {
+                currentGain = gainDb;
+                $('current-gain').textContent = `Current: ${gainDb.toFixed(1)} dB`;
+                
+                // Only update dropdown if server value significantly changed
+                if (Math.abs(lastServerGain - gainDb) > 0.1) {
+                    const gainSelect = $('gain-select');
+                    let bestMatch = null;
+                    let minDiff = Infinity;
+                    
+                    // Find closest matching option
+                    for (let i = 0; i < gainSelect.options.length; i++) {
+                        const opt = gainSelect.options[i];
+                        if (opt.value !== 'auto') {
+                            const optVal = parseFloat(opt.value);
+                            const diff = Math.abs(optVal - gainDb);
+                            if (diff < minDiff) {
+                                minDiff = diff;
+                                bestMatch = opt.value;
+                            }
+                        }
+                    }
+                    
+                    if (bestMatch && minDiff < 0.5) {
+                        gainSelect.value = bestMatch;
+                        lastServerGain = gainDb;
+                    }
+                }
+            }
+            
+            // Handle RTL-TCP channel updates
+            if (rtlTcpChannel !== currentRtlTcpChannel) {
+                currentRtlTcpChannel = rtlTcpChannel;
+                
+                // Update dropdown without triggering change event
+                const channelSelect = $('rtl-tcp-channel-select');
+                channelSelect.removeEventListener('change', handleRtlTcpChannelChange);
+                channelSelect.value = rtlTcpChannel;
+                channelSelect.addEventListener('change', handleRtlTcpChannelChange);
+                
+                updateRtlTcpStatus(rtlTcpChannel);
+                log(`RTL-TCP channel updated to ${rtlTcpChannel}`);
+            }
+            
+            // Update bias tee state from server
+            updateBias(biasState === 1);
+
+            // Update per-bin phase calibration state from server
+            updatePerBin(perBinState === 1);
+
+            // Detect active element count change and reinitialize UI
+            if (nDev !== activeElements && nDev >= 2 && nDev <= ND) {
+                log(`Active elements changed: ${activeElements} -> ${nDev}`);
+                activeElements = nDev;
+                // Reinitialize UI components for new element count
+                initCorr();
+                initTable();
+                initPhase();
+                initRtlTcpChannelSelect();
+                initBiasTees();
+                if (!reconfiguring && document.activeElement !== $('num-elements-select'))
+                    $('num-elements-select').value = activeElements;
+                // Update config display
+                $('config-info').textContent = `${activeElements} devices, Ref Ch${RC}, ${CS}pt FFT`;
+            }
+
+            for (let i = 0; i < nCorr; i++) { v.getFloat32(o, 1); o += 4; }
+            
+            const [allLags, allPhases] = [{}, {}];
+            for (let ch = 0; ch < nDev; ch++) { allLags[ch] = v.getFloat32(o, 1); o += 4; }
+            for (let ch = 0; ch < nDev; ch++) { allPhases[ch] = v.getFloat32(o, 1); o += 4; }
+            
+            const cData = {};
+            let anyCalibrationComplete = false;
+            for (let ch = 0; ch < nDev; ch++) {
+                const [sc, zlc, conv, si] = [v.getUint32(o, 1), v.getUint32(o += 4, 1), v.getUint32(o += 4, 1), v.getUint32(o += 4, 1)];
+                o += 4;
+                
+                if (ch !== refCh) {
+                    cData[ch] = { state_code: sc, zero_lag_count: zlc, converged: conv === 1, status_info: si };
+                    
+                    // Check if phase compensation is complete (status_info >= 10)
+                    if ((si & 0xFF) >= 10) {
+                        anyCalibrationComplete = true;
+                    }
+                    
+                    if (Object.keys(cData).length === 1) {
+                        const [fftEn, autoOff] = [(si & 0x100) !== 0, (si & 0x200) !== 0];
+                        updateFFT(fftEn, autoOff);
+                    }
+                }
+            }
+            
+            // On first data received, check if calibration is complete and enable controls
+            if (!initialStateReceived) {
+                initialStateReceived = true;
+                
+                // Sync checkbox states with server state
+                const fftCheckbox = $('fft-chk');
+                const biasCheckbox = $('bias-chk');
+                const perBinCheckbox = $('perbin-chk');
+
+                // Remove event listeners temporarily to avoid triggering changes
+                fftCheckbox.removeEventListener('change', handleFFTChk);
+                biasCheckbox.removeEventListener('change', handleBiasChk);
+                perBinCheckbox.removeEventListener('change', handlePerBinChk);
+                
+                // Set checkbox states based on server data
+                if (Object.keys(cData).length > 0) {
+                    const firstChannel = cData[Object.keys(cData)[0]];
+                    const fftEnabled = (firstChannel.status_info & 0x100) !== 0;
+                    const autoDisabled = (firstChannel.status_info & 0x200) !== 0;
+                    const userOverride = (firstChannel.status_info & 0x400) !== 0;
+                    
+                    fftCheckbox.checked = fftEnabled;
+                    
+                    // Set user force based on server override flag
+                    if (userOverride) {
+                        userForce = 1;
+                        log('User override state detected from server');
+                    } else {
+                        userForce = 0;
+                    }
+                    
+                    // Set phase tracking based on FFT state and calibration status
+                    if (fftEnabled && anyCalibrationComplete) {
+                        pTrack = 1;
+                        $('phase-info').innerHTML = `Tracking active (user enabled) | ${pHist.length}/100`;
+                        log('Phase tracking enabled - FFT active and calibration complete');
+                    } else if (fftEnabled && !anyCalibrationComplete) {
+                        pTrack = 1;
+                        $('phase-info').innerHTML = `Tracking active (calibrating) | ${pHist.length}/100`;
+                        log('Phase tracking enabled - FFT active during calibration');
+                    } else {
+                        pTrack = 0;
+                        $('phase-info').innerHTML = `Tracking stopped | ${pHist.length}/100`;
+                        log('Phase tracking disabled - FFT off');
+                    }
+                }
+                biasCheckbox.checked = biasState === 1;
+                perBinCheckbox.checked = perBinState === 1;
+                perBinOn = perBinState === 1;
+
+                // Re-add event listeners
+                fftCheckbox.addEventListener('change', handleFFTChk);
+                biasCheckbox.addEventListener('change', handleBiasChk);
+                perBinCheckbox.addEventListener('change', handlePerBinChk);
+                
+                // Enable controls based on calibration state
+                if (anyCalibrationComplete) {
+                    updateControls(true);
+                    log('Controls enabled - calibration already complete');
+                } else {
+                    updateControls(false);
+                    log('Controls disabled - calibration in progress');
+                }
+            }
+            
+            // Read decimated correlation data
+            let pi = 0;
+            for (let i = 0; i < nCorr; i++) {
+                // Read decimated size
+                const decimatedSize = v.getUint32(o, 1); o += 4;
+                
+                // Read indices (lag values)
+                const indices = [];
+                for (let j = 0; j < decimatedSize; j++) {
+                    indices.push(v.getInt16(o, 1));
+                    o += 2;
+                }
+                
+                // Read correlation data
+                const corrData = [];
+                for (let j = 0; j < decimatedSize; j++) {
+                    corrData.push(v.getUint8(o));
+                    o += 1;
+                }
+                
+                if (pi < cPlots.length) {
+                    // Save current zoom state before updating
+                    const zoomState = plotZoomStates[pi];
+                    
+                    pData2[pi][0] = indices;
+                    pData2[pi][1] = corrData;
+                    
+                    // Update data
+                    cPlots[pi].setData(pData2[pi]);
+                    
+                    // Restore zoom if it was zoomed
+                    if (zoomState.isZoomed && zoomState.xMin !== null && zoomState.xMax !== null) {
+                        cPlots[pi].setScale('x', {
+                            min: zoomState.xMin,
+                            max: zoomState.xMax
+                        });
+                    }
+                }
+                pi++;
+            }
+            
+            updateTable(allLags, allPhases, cData, compAct === 1);
+            if (pTrack) updatePhase(allPhases);
+            
+            fCnt++;
+            const now = Date.now();
+            if (now - lTime >= 1000) {
+                const fps = (fCnt * 1000 / (now - lTime)).toFixed(1);
+                let msg = `${fps} FPS`;
+                if (compAct) msg += ' | 🎯 COMP';
+                if (pTrack) msg += ' | 📊 PHASE';
+                if (!fftOn) msg += ' | ⏸️ OFF';
+                if (biasState) msg += ' | ⚡ BIAS';
+                msg += ` | ${freqMhz.toFixed(1)} MHz`;
+                
+                // Show gain status (Auto or dB value)
+                if (currentGain < 0) {
+                    msg += ' | Auto Gain';
+                } else {
+                    msg += ` | ${currentGain.toFixed(1)} dB`;
+                }
+                
+                // Show RTL-TCP channel
+                msg += ` | RTL-TCP:Ch${currentRtlTcpChannel}`;
+                
+                $('stats').textContent = msg;
+                $('txt').textContent = 'Connected - Receiving data';
+                [fCnt, lTime] = [0, now];
+            }
+        };
+        
+        // ---- Forward Phase Compensation (S2P) ----
+        let fwdAvailable = [];     // available .s2p filenames in the folder
+        let fwdFiles = [];         // currently-selected filename per channel
+        let fwdLoaded = [];        // per-channel parse-OK flag
+        let fwdEnabled = false;
+
+        const fwdChanLabel = ch => 'Ch' + ch + (ch === RC ? ' (ref)' : '');
+
+        const buildFwdRows = () => {
+            const host = $('fwdcomp-rows');
+            if (!host || host.childElementCount) return;   // build once
+            for (let ch = 0; ch < ND; ch++) {
+                const item = document.createElement('div');
+                item.className = 'sdr-control-item';
+                const lab = document.createElement('label');
+                lab.textContent = fwdChanLabel(ch) + ':';
+                const sel = document.createElement('select');
+                sel.id = 'fwdcomp-sel-' + ch;
+                sel.addEventListener('change', () => sendFwdFile(ch, sel.value));
+                const stat = document.createElement('span');
+                stat.id = 'fwdcomp-stat-' + ch;
+                stat.style.marginLeft = '8px';
+                item.append(lab, sel, stat);
+                host.appendChild(item);
+            }
+        };
+
+        const populateFwdSelect = ch => {
+            const sel = $('fwdcomp-sel-' + ch);
+            if (!sel) return;
+            const cur = fwdFiles[ch] || '';
+            sel.innerHTML = '';
+            const none = document.createElement('option');
+            none.value = ''; none.textContent = '(none)';
+            sel.appendChild(none);
+            const opts = fwdAvailable.slice();
+            // Keep a previously-selected file visible even if the folder scan missed it.
+            if (cur && !opts.includes(cur)) opts.push(cur);
+            opts.forEach(f => {
+                const o = document.createElement('option');
+                o.value = f; o.textContent = f;
+                sel.appendChild(o);
+            });
+            sel.value = cur;
+            const stat = $('fwdcomp-stat-' + ch);
+            if (stat) {
+                if (!cur) { stat.textContent = ''; stat.style.color = ''; }
+                else if (fwdLoaded[ch]) { stat.textContent = '✓ loaded'; stat.style.color = '#28a745'; }
+                else { stat.textContent = '⚠ load failed'; stat.style.color = '#dc3545'; }
+            }
+        };
+
+        const refreshFwdFiles = () => {
+            fetch('s2p_files').then(r => r.json()).then(d => {
+                fwdAvailable = Array.isArray(d.files) ? d.files : [];
+                if (d.dir) $('fwdcomp-dir').textContent = d.dir + '/';
+                for (let ch = 0; ch < ND; ch++) populateFwdSelect(ch);
+                renderFwdFilesList();
+            }).catch(e => console.error('s2p_files fetch failed', e));
+        };
+
+        // List the files in the folder, each with a delete button, so an
+        // incorrectly-uploaded file can be removed from the browser.
+        const renderFwdFilesList = () => {
+            const host = $('fwdcomp-files-list');
+            if (!host) return;
+            host.innerHTML = '';
+            if (!fwdAvailable.length) {
+                host.innerHTML = '<div class="info">No .s2p files uploaded yet.</div>';
+                return;
+            }
+            const title = document.createElement('div');
+            title.className = 'info';
+            title.style.marginBottom = '4px';
+            title.textContent = 'Uploaded files:';
+            host.appendChild(title);
+            fwdAvailable.forEach(name => {
+                const row = document.createElement('div');
+                row.className = 'sdr-control-item';
+                const lab = document.createElement('span');
+                lab.textContent = name;
+                lab.style.flex = '1';
+                const del = document.createElement('button');
+                del.textContent = '🗑 Delete';
+                del.addEventListener('click', () => deleteFwdFile(name));
+                row.append(lab, del);
+                host.appendChild(row);
+            });
+        };
+
+        // Upload one or more selected .s2p files to the receiver (raw body,
+        // filename in the query). Validation/parse happens server-side.
+        const uploadFwdFiles = async () => {
+            const inp = $('fwdcomp-file'), msg = $('fwdcomp-upload-msg');
+            if (!inp || !inp.files || !inp.files.length) {
+                if (msg) msg.textContent = 'Choose a file first';
+                return;
+            }
+            const files = Array.from(inp.files);
+            let okCount = 0, failCount = 0;
+            if (msg) msg.textContent = 'Uploading…';
+            for (const f of files) {
+                try {
+                    const r = await fetch('s2p_upload?name=' + encodeURIComponent(f.name),
+                                          { method: 'POST', body: f });
+                    const d = await r.json().catch(() => ({ ok: r.ok }));
+                    if (r.ok && d.ok) { okCount++; log(`Uploaded ${f.name}`); }
+                    else { failCount++; log(`Upload failed for ${f.name}: ${d.error || r.status}`); }
+                } catch (e) { failCount++; log(`Upload error for ${f.name}: ${e}`); }
+            }
+            if (msg) msg.textContent = `Uploaded ${okCount}` + (failCount ? `, ${failCount} failed` : '');
+            inp.value = '';
+            refreshFwdFiles();
+        };
+
+        const deleteFwdFile = async name => {
+            if (!name) return;
+            if (!confirm(`Delete calibration file "${name}"?\nThis also clears it from any channel using it.`)) return;
+            try {
+                const r = await fetch('s2p_delete?name=' + encodeURIComponent(name), { method: 'POST' });
+                const d = await r.json().catch(() => ({ ok: r.ok }));
+                if (r.ok && d.ok) log(`Deleted ${name}`);
+                else log(`Delete failed for ${name}: ${d.error || r.status}`);
+            } catch (e) { log(`Delete error for ${name}: ${e}`); }
+            refreshFwdFiles();
+        };
+
+        const sendFwdFile = (ch, fname) => {
+            if (ws?.readyState === 1) {
+                ws.send(`FWD_COMP_FILE:${ch}:${fname}`);
+                log(`Forward comp Ch${ch}: ${fname || '(none)'}`);
+            }
+        };
+
+        const updateFwdText = on => {
+            const d = $('fwdcomp-status'), t = $('fwdcomp-txt');
+            if (d && t) {
+                d.className = on ? 'fft-status fft-enabled' : 'fft-status fft-disabled';
+                t.textContent = on ? 'Forward Comp: ON' : 'Forward Comp: OFF';
+            }
+        };
+
+        const applyFwdCompState = st => {
+            if (st.fwd_comp_enabled !== undefined) {
+                fwdEnabled = !!st.fwd_comp_enabled;
+                const c = $('fwdcomp-chk');
+                if (c && document.activeElement !== c) c.checked = fwdEnabled;
+                updateFwdText(fwdEnabled);
+            }
+            if (st.fwd_comp_amplitude !== undefined) {
+                const c = $('fwdcomp-amp-chk');
+                if (c && document.activeElement !== c) c.checked = !!st.fwd_comp_amplitude;
+            }
+            if (Array.isArray(st.fwd_comp_files)) fwdFiles = st.fwd_comp_files;
+            if (Array.isArray(st.fwd_comp_loaded)) fwdLoaded = st.fwd_comp_loaded;
+            if (Array.isArray(st.fwd_comp_files) || Array.isArray(st.fwd_comp_loaded))
+                for (let ch = 0; ch < ND; ch++) populateFwdSelect(ch);
+        };
+
+        const initFwdComp = () => {
+            buildFwdRows();
+            $('fwdcomp-chk').addEventListener('change', e => {
+                if (ws?.readyState === 1) ws.send(e.target.checked ? 'FWD_COMP_ENABLE' : 'FWD_COMP_DISABLE');
+                updateFwdText(e.target.checked);
+                log(`Forward compensation ${e.target.checked ? 'enabled' : 'disabled'}`);
+            });
+            $('fwdcomp-amp-chk').addEventListener('change', e => {
+                if (ws?.readyState === 1) ws.send(e.target.checked ? 'FWD_COMP_AMP_ON' : 'FWD_COMP_AMP_OFF');
+                log(`Forward comp amplitude correction ${e.target.checked ? 'on' : 'off (phase-only)'}`);
+            });
+            $('fwdcomp-upload-btn').addEventListener('click', uploadFwdFiles);
+            $('fwdcomp-rescan-btn').addEventListener('click', refreshFwdFiles);
+            refreshFwdFiles();
+        };
+
+        // Initialize
+        [initCorr, initTable, initPhase, initRtlTcpChannelSelect, initBiasTees, initFwdComp].forEach(fn => fn());
+        
+        // Don't set initial control states - wait for server data
+        // Controls will be enabled/disabled based on actual calibration state
+        
+        // Add event listeners but don't set initial checkbox states
+        $('fft-chk').addEventListener('change', handleFFTChk);
+        $('bias-chk').addEventListener('change', handleBiasChk);
+        $('perbin-chk').addEventListener('change', handlePerBinChk);
+        [pending, userForce, biasPending] = [null, null, null];
+        
+        // Add frequency and gain control handlers
+        // Upper bound covers the KrakenSDR Wideband variant (low-side injection
+        // reaches 6668 MHz); the server rejects anything the current hardware
+        // mode can't actually tune.
+        const handleFreqChange = () => {
+            const newFreq = parseFloat($('freq-input').value);
+            if (!isNaN(newFreq) && newFreq >= 24 && newFreq <= 6668) {
+                const freqHz = newFreq * 1e6;
+                if (ws?.readyState === 1) {
+                    ws.send(`SDR_SETTINGS:{"frequency":${freqHz}}`);
+                    log(`Frequency change requested: ${newFreq} MHz - will trigger recalibration`);
+                    // Reset calibration tracking since we're triggering a recalibration
+                    calibrationActive = 1;
+                    updateControls(false);  // Disable controls during recalibration
+                }
+            }
+        };
+        
+        const handleGainChange = () => {
+            const gainSelect = $('gain-select');
+            const gainValue = gainSelect.value;
+            
+            if (ws?.readyState === 1) {
+                if (gainValue === 'auto') {
+                    // Send auto gain command (using -1 as a special value)
+                    ws.send(`SDR_SETTINGS:{"gain":-1}`);
+                    log(`Auto gain mode requested - will trigger recalibration`);
+                    lastServerGain = -1;  // Update expected server value
+                } else {
+                    const newGain = parseFloat(gainValue);
+                    if (!isNaN(newGain)) {
+                        ws.send(`SDR_SETTINGS:{"gain":${newGain}}`);
+                        log(`Gain change requested: ${newGain} dB - will trigger recalibration`);
+                        lastServerGain = newGain;  // Update expected server value
+                    }
+                }
+                // Reset calibration tracking since we're triggering a recalibration
+                calibrationActive = 1;
+                updateControls(false);  // Disable controls during recalibration
+            }
+        };
+        
+        $('freq-btn').addEventListener('click', handleFreqChange);
+        $('gain-btn').addEventListener('click', handleGainChange);
+
+        // Periodic calibration check controls
+        $('recal-chk').addEventListener('change', e => {
+            if (ws?.readyState === 1) {
+                ws.send(e.target.checked ? 'PERIODIC_RECAL_ENABLE' : 'PERIODIC_RECAL_DISABLE');
+                log(`Periodic calibration check ${e.target.checked ? 'enabled' : 'disabled'}`);
+            }
+        });
+        const sendRecalPeriod = () => {
+            const m = parseInt($('recal-min-input').value, 10);
+            if (Number.isFinite(m) && m >= 1 && ws?.readyState === 1) {
+                ws.send(`PERIODIC_RECAL_PERIOD:${m}`);
+                log(`Periodic calibration check period set to ${m} min`);
+            }
+        };
+        $('recal-min-btn').addEventListener('click', sendRecalPeriod);
+        $('recal-min-input').addEventListener('keydown', e => { if (e.key === 'Enter') sendRecalPeriod(); });
+        $('force-recal-btn').addEventListener('click', () => {
+            if (ws?.readyState === 1) {
+                // KerberosSDR has no noise-source RF switch: the calibration
+                // noise couples into the antenna path, so a calibration with
+                // antennas connected is invalid.
+                if (kerberosMode && !kerberosSw &&
+                    !confirm('KerberosSDR calibration:\n\n' +
+                             '1. DISCONNECT ALL ANTENNAS now (noise is coupled into the antenna path).\n' +
+                             '2. Calibration takes ~30-60 s with the noise source on.\n' +
+                             '3. Reconnect the antennas once the banner shows "calibrated".\n\n' +
+                             'Are the antennas disconnected?')) {
+                    return;
+                }
+                ws.send('FORCE_RECAL');
+                log('Force recalibration requested');
+            }
+        });
+
+        // Lag compensation reset handler
+        $('reset-lag-btn').addEventListener('click', () => {
+            if (ws?.readyState === 1) {
+                if (confirm('Reset lag compensation for all channels? This will restart lag calibration.')) {
+                    ws.send('RESET_LAG_COMPENSATION');
+                    log('Lag compensation reset requested');
+                    calibrationActive = 1;
+                    updateControls(false);  // Disable controls during recalibration
+                }
+            }
+        });
+
+        // Allow Enter key to submit frequency
+        $('freq-input').addEventListener('keypress', e => { if (e.key === 'Enter') handleFreqChange(); });
+
+        // Array element count selector (repopulated when STATE reports max_elements)
+        initNumElementsSelect();
+        $('num-elements-select').addEventListener('change', handleNumElementsChange);
+
+        connect();
+        
+        setTimeout(() => {
+            if (fCnt === 0) {
+                $('txt').textContent = 'Waiting for C program...';
+                $('txt').className = 'error';
+            }
+        }, 5000);
+    </script>
+</body>
+</html>

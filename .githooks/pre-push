@@ -1,0 +1,74 @@
+#!/bin/bash
+#
+# pre-push: block pushes whose OUTGOING commits contain station secrets
+# (KrakenPro key, real lat/lon) or a settings file that should never be
+# tracked. Backstop behind the clean filter (scripts/git-secrets-clean),
+# which sanitizes these automatically at commit time - this hook only fires
+# if the filter was not configured (fresh clone before install.sh) or a
+# secret landed some other way.
+#
+# Activated per clone by install.sh:  git config core.hooksPath .githooks
+# Emergency bypass:                   git push --no-verify
+#
+set -u
+
+fail=0
+
+# Scan one commit range for secrets in changed settings/config files.
+scan_range() {
+    local range="$1"
+    local commits
+    commits=$(git rev-list "$range" 2>/dev/null) || return 0
+    local c f blob
+    for c in $commits; do
+        # Only files that can carry station config are inspected, so ordinary
+        # source/doc changes can never false-positive.
+        for f in $(git diff-tree --no-commit-id --name-only -r "$c" -- \
+                       '*config.json' '*doa_settings.json' '*settings*.json' \
+                       '*api_token'); do
+            case "$f" in
+                *doa_settings.json|*api_token)
+                    echo "BLOCKED: $f is committed in ${c:0:9} - this file holds" >&2
+                    echo "         the KrakenPro key / station location and must stay untracked." >&2
+                    fail=1
+                    continue
+                    ;;
+            esac
+            blob=$(git show "$c:$f" 2>/dev/null) || continue
+            if echo "$blob" | grep -Eq '"(krakenpro_key|web_mapper_key)"[[:space:]]*:[[:space:]]*"[^"]{6,}"'; then
+                echo "BLOCKED: KrakenPro API key found in $f at commit ${c:0:9}." >&2
+                fail=1
+            fi
+            if echo "$blob" | grep -Eq '"(latitude|longitude)"[[:space:]]*:[[:space:]]*-?(0*[1-9][0-9]*|0*\.0*[1-9])'; then
+                echo "BLOCKED: real latitude/longitude found in $f at commit ${c:0:9}." >&2
+                fail=1
+            fi
+            if echo "$blob" | grep -E '"static_location"[[:space:]]*:' | grep -Evq '"(0, *0, *0|0,0,0)?"'; then
+                echo "BLOCKED: real static_location found in $f at commit ${c:0:9}." >&2
+                fail=1
+            fi
+        done
+    done
+}
+
+# stdin: <local_ref> <local_sha> <remote_ref> <remote_sha> per ref being pushed
+zero=0000000000000000000000000000000000000000
+while read -r local_ref local_sha remote_ref remote_sha; do
+    [ "$local_sha" = "$zero" ] && continue      # branch deletion: nothing outgoing
+    if [ "$remote_sha" = "$zero" ]; then
+        # New remote branch: scan commits not already on any remote.
+        scan_range "$local_sha --not --remotes"
+    else
+        scan_range "$remote_sha..$local_sha"
+    fi
+done
+
+if [ "$fail" -ne 0 ]; then
+    echo >&2
+    echo "Push aborted: station secrets detected in the outgoing commits." >&2
+    echo "Fix: run ./install.sh once (registers the auto-sanitize clean filter)," >&2
+    echo "then re-commit the offending file - or amend/rebase the commit out." >&2
+    echo "Bypass (know what you are doing): git push --no-verify" >&2
+    exit 1
+fi
+exit 0

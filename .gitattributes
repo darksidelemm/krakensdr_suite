@@ -1,0 +1,10 @@
+# Auto-sanitize station secrets (KrakenPro key, lat/lon) at commit time.
+# The clean filter (scripts/git-secrets-clean) zeroes the sensitive fields in
+# the blob git stores; the working file keeps its real values. Registered per
+# clone by install.sh:
+#   git config filter.kraken-secrets.clean  scripts/git-secrets-clean
+#   git config filter.kraken-secrets.required true
+kraken_doa_v2/web_mapper_middleware/config.json filter=kraken-secrets
+# doa_settings.json is gitignored; the filter is a second line of defense if
+# one is ever force-added.
+doa_settings.json filter=kraken-secrets

@@ -1,0 +1,62 @@
+id: krakensdr_v2_correlator
+label: KrakenSDR v2 Cross Correlator
+category: '[KrakenSDR v2]'
+
+templates:
+  imports: from gnuradio import krakensdr_v2
+  make: krakensdr_v2.correlator(${vec_len}, ${fft_cut})
+
+parameters:
+- id: vec_len
+  label: Vector Length
+  dtype: int
+  default: 16384
+- id: fft_cut
+  label: Output Lag Window
+  dtype: int
+  default: 2048
+
+inputs:
+- label: in
+  domain: stream
+  dtype: complex
+  vlen: ${ vec_len }
+  multiplicity: 2
+
+outputs:
+- label: xcorr
+  domain: stream
+  dtype: float
+  vlen: ${ fft_cut }
+- label: phase
+  domain: stream
+  dtype: float
+  optional: true
+- label: lag
+  domain: stream
+  dtype: float
+  optional: true
+
+asserts:
+- ${ vec_len >= 2 }
+- ${ fft_cut >= 2 and fft_cut <= 2 * vec_len }
+
+documentation: |-
+  FFT-based cross-correlator for KrakenSDR coherence checking (krakensdr_v2).
+
+  Computes the full linear cross-correlation of the two input vectors via
+  zero-padded FFTs, per input item.
+
+  Outputs:
+   - xcorr: float[fft_cut] correlation magnitude in dB, normalized to
+            peak = 0 dB, centered on zero lag (bin fft_cut/2)
+   - phase: phase at the zero-lag bin, degrees
+   - lag:   correlation peak lag in samples with sub-sample interpolation
+            (positive = input 1 delayed relative to input 0)
+
+  On a calibrated KrakenSDR fed from the v2 source, the peak sits at lag ~0
+  with a stable phase on every channel pair. For the strongest test signal,
+  force the calibration noise source on from the heimdall web UI (port 8070)
+  and set the source block to 'Pass all frames'.
+
+file_format: 1
