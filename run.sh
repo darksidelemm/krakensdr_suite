@@ -281,6 +281,12 @@ cat <<EOF
 
 EOF
 sleep 1
+# No tty (systemd, cron, ssh -T) or NO_ATTACH=1: leave the session detached.
+# The apps are already running; there is simply no client to attach.
+if [[ "${NO_ATTACH:-0}" == "1" || ! -t 0 ]]; then
+    ok "Session '$SESSION' running detached. Attach with: tmux attach -t $SESSION"
+    exit 0
+fi
 # Attach - or switch, if we were launched from inside another tmux session
 # (a plain 'attach' there errors with "sessions should be nested with care").
 if [[ -n "${TMUX:-}" ]]; then
