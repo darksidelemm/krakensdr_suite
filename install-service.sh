@@ -16,24 +16,24 @@
 #   ./install-service.sh --uninstall
 #
 set -euo pipefail
- 
+
 SESSION="${TMUX_SESSION:-krakensdr}"
 VARIANT_FLAGS="${VARIANT_FLAGS:-}"
 KRAKEN_TUNERS="${KRAKEN_TUNERS:-5}"
 WAIT_TIMEOUT="${WAIT_TIMEOUT:-600}"
- 
+
 RUN_USER="${SUDO_USER:-$USER}"
 RUN_HOME="$(getent passwd "$RUN_USER" | cut -d: -f6)"
 APP_DIR="${APP_DIR:-$RUN_HOME/krakensdr_suite}"
 RUN_SH="$APP_DIR/run.sh"
 SVC=/etc/systemd/system/krakensdr.service
- 
+
 say()  { echo -e "\033[36;1m==>\033[0m \033[1m$*\033[0m"; }
 ok()   { echo -e "\033[32m   ok  $*\033[0m"; }
 warn() { echo -e "\033[33m   !   $*\033[0m"; }
 die()  { echo -e "\033[31;1mError:\033[0m $*" >&2; exit 1; }
 asuser() { sudo -u "$RUN_USER" "$@"; }
- 
+
 # ---------------------------------------------------------------- uninstall --
 if [[ "${1:-}" == "--uninstall" ]]; then
     sudo systemctl disable --now krakensdr.service 2>/dev/null || true
@@ -46,15 +46,15 @@ if [[ "${1:-}" == "--uninstall" ]]; then
     ok "Uninstalled."
     exit 0
 fi
- 
+
 # -------------------------------------------------------------- preflight ----
 [[ -f "$RUN_SH" ]] || die "run.sh not found at $RUN_SH (set APP_DIR= to override)"
 chmod +x "$RUN_SH"
- 
+
 say "User $RUN_USER, app dir $APP_DIR, session '$SESSION'"
 sudo apt-get install -y tmux lxterminal >/dev/null
 ok "tmux + lxterminal present"
- 
+
 # ------------------------------------------------------- USB enumeration ------
 # multi-user.target can be reached before all dongles enumerate on a cold boot.
 sudo tee /usr/local/bin/kraken-wait-usb >/dev/null <<EOF
@@ -69,14 +69,14 @@ echo "only \$n of \$WANT tuners enumerated; starting anyway" >&2
 exit 0
 EOF
 sudo chmod +x /usr/local/bin/kraken-wait-usb
- 
+
 # ------------------------------------------------------------ systemd unit ---
 sudo tee "$SVC" >/dev/null <<EOF
 [Unit]
 Description=KrakenSDR Suite
 After=network-online.target
 Wants=network-online.target
- 
+
 [Service]
 Type=forking
 GuessMainPID=yes
@@ -97,12 +97,12 @@ Restart=on-failure
 RestartSec=15
 TimeoutStartSec=120
 TimeoutStopSec=30
- 
+
 [Install]
 WantedBy=multi-user.target
 EOF
 ok "unit written"
- 
+
 # ------------------------------------------------------- viewer (one only) ---
 # flock covers the race where two launchers fire before either has attached;
 # list-clients covers the ordinary case; attach -d is the final backstop.
@@ -110,23 +110,23 @@ sudo tee /usr/local/bin/kraken-term >/dev/null <<EOF
 #!/bin/bash
 export TMUX_TMPDIR=/tmp
 SESSION="\${TMUX_SESSION:-$SESSION}"
- 
+
 exec 9>/tmp/kraken-term.lock
 flock -n 9 || exit 0
- 
+
 for i in \$(seq 1 90); do
     tmux has-session -t "\$SESSION" 2>/dev/null && break
     sleep 1
 done
 tmux has-session -t "\$SESSION" 2>/dev/null || { echo "no '\$SESSION' session"; exit 1; }
- 
+
 tmux list-clients -t "\$SESSION" 2>/dev/null | grep -q . && exit 0
- 
+
 lxterminal --title="KrakenSDR" --geometry=150x45 -e "tmux attach -d -t \$SESSION" &
 sleep 3
 EOF
 sudo chmod +x /usr/local/bin/kraken-term
- 
+
 # ------------------------------------------------------ autostart: pick ONE ---
 # Bookworm labwc reads BOTH ~/.config/labwc/autostart and the XDG dir, so
 # installing to every mechanism opens two windows on the same session.
@@ -134,11 +134,11 @@ asuser mkdir -p "$RUN_HOME/.config"
 HAS_DESKTOP=0
 dpkg -s raspberrypi-ui-mods >/dev/null 2>&1 && HAS_DESKTOP=1
 [[ -d "$RUN_HOME/.config/labwc" || -f "$RUN_HOME/.config/wayfire.ini" ]] && HAS_DESKTOP=1
- 
+
 rm -f "$RUN_HOME/.config/autostart/kraken-term.desktop"
 sed -i '/kraken-term/d' "$RUN_HOME/.config/labwc/autostart" 2>/dev/null || true
 sed -i '/kraken-term/d' "$RUN_HOME/.config/wayfire.ini" 2>/dev/null || true
- 
+
 if [[ "$HAS_DESKTOP" == "1" ]]; then
     if [[ -d "$RUN_HOME/.config/labwc" ]] || command -v labwc >/dev/null 2>&1; then
         asuser mkdir -p "$RUN_HOME/.config/labwc"
@@ -165,14 +165,14 @@ EOF
         ok "autostart: XDG"
     fi
 fi
- 
+
 # ------------------------------------------------ console fallback (no GUI) ---
 P="$RUN_HOME/.bash_profile"
 asuser touch "$P"
 sed -i '/# --- KrakenSDR console attach/,/# --- end KrakenSDR/d' "$P" 2>/dev/null || true
 if [[ "$HAS_DESKTOP" == "0" ]]; then
     asuser tee -a "$P" >/dev/null <<EOF
- 
+
 # --- KrakenSDR console attach
 if [ "\$(tty)" = "/dev/tty1" ] && [ -z "\${TMUX:-}" ]; then
     export TMUX_TMPDIR=/tmp
@@ -183,50 +183,63 @@ fi
 EOF
     ok "console fallback on tty1"
 fi
- 
+
 # ------------------------------------------------------------- tmux config ---
 T="$RUN_HOME/.tmux.conf"
 asuser touch "$T"
 grep -q aggressive-resize "$T" || echo "set -g aggressive-resize on" | asuser tee -a "$T" >/dev/null
- 
+
 # ----------------------------------------------------------------- autologin --
 if [[ "$HAS_DESKTOP" == "1" ]]; then
     sudo raspi-config nonint do_boot_behaviour B4 2>/dev/null || warn "set desktop autologin manually"
 else
     sudo raspi-config nonint do_boot_behaviour B2 2>/dev/null || warn "set console autologin manually"
 fi
- 
-# ---------------------------------------------------------------- Pi 5 HDMI ---
+
+# ------------------------------------------------- force HDMI (headless boot) --
+# With no monitor at boot, KMS creates no framebuffer -> the desktop never
+# starts -> no terminal for a later-plugged monitor or VNC. Forcing the
+# connector fixes all three. Works on Pi 4 and Pi 5 (hdmi_force_hotplug does
+# not work under KMS; this kernel parameter is the supported method).
+# Override the mode by editing cmdline.txt if your display is not 1080p60.
 CMD=/boot/firmware/cmdline.txt
 [[ -f "$CMD" ]] || CMD=/boot/cmdline.txt
 if [[ -f "$CMD" ]] && ! grep -q 'video=HDMI-A-1' "$CMD"; then
-    warn "No forced HDMI mode. On a headless boot the desktop has no output, so"
-    warn "a later-plugged monitor or VNC shows nothing. To force it:"
-    warn "  sudo sed -i '1s|\$| video=HDMI-A-1:1920x1080@60D|' $CMD"
+    sudo cp "$CMD" "$CMD.bak"
+    # cmdline.txt must stay a single line; strip trailing newlines, append, re-add one.
+    sudo sed -i -z 's/\n*$//' "$CMD"
+    echo -n " video=HDMI-A-1:1920x1080@60D" | sudo tee -a "$CMD" >/dev/null
+    echo | sudo tee -a "$CMD" >/dev/null
+    ok "forced HDMI-A-1 1920x1080@60 (backup: $CMD.bak)"
 fi
- 
+
+# Enable VNC so headless users can see the terminal (wayvnc on Bookworm).
+if [[ "$HAS_DESKTOP" == "1" ]]; then
+    sudo raspi-config nonint do_vnc 0 2>/dev/null && ok "VNC enabled" || warn "enable VNC manually if wanted"
+fi
+
 sudo systemctl daemon-reload
 sudo systemctl enable krakensdr.service >/dev/null
 ok "service enabled"
- 
+
 cat <<EOF
- 
+
   Installed. Reboot to start on boot:
- 
+
     sudo reboot
- 
+
   Check after reboot:
     systemctl status krakensdr           # active (running)
     journalctl -u krakensdr -b
- 
+
   Operate:
     sudo systemctl {start,stop,restart} krakensdr
     kraken-term                          # open a viewer window
     tmux attach -d -t $SESSION      # attach from SSH
- 
+
   While the service is running, use systemctl / kraken-term rather than
   running run.sh by hand.
- 
+
   Remove with:  ./install-service.sh --uninstall
- 
+
 EOF
