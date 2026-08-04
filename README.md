@@ -6,9 +6,11 @@ The KrakenSDR Suite V2 software is currently in beta.
 
 Install:
 
+```
 git clone https://github.com/krakenrf/krakensdr_suite
 cd krakensdr_suite
 ./install
+```
 
 You may need to reboot after running ./install.
 
@@ -16,6 +18,8 @@ To Run:
 
 Simply use the command:
 
+```
 ./run
+```
 
 In any terminal window, with your KrakenSDR connected and powered up.
