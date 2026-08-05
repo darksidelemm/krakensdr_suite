@@ -5566,9 +5566,17 @@ function syncWaterfallSize(plot) {
 function connect() {
   const proto=location.protocol==='https:'?'wss:':'ws:';
   const url=proto+'//'+(location.hostname||'localhost')+':'+(location.port||'8080')+'/ws';
+  const connEl=$id('status-connection');
+  if(connEl){connEl.textContent='Connecting…';connEl.style.background='#e65100';connEl.style.color='#fff';}
   ws=new WebSocket(url);
   ws.binaryType='arraybuffer';
-  
+
+  // An attempt that gets no reply at all (SYN or upgrade black-holed, e.g. a
+  // phone on a no-internet hotspot) never fires onclose and would sit in
+  // CONNECTING forever. Cap it; onclose then schedules the normal retry.
+  const attempt=ws;
+  setTimeout(()=>{if(attempt===ws&&attempt.readyState===WebSocket.CONNECTING)attempt.close();},6000);
+
   ws.onopen=()=>{
     // API auth: the server substitutes the token below when serving the page.
     // Empty (no token configured) => fail-open, send nothing. Must be the

@@ -380,7 +380,11 @@ void WebSocketServer::web_server_main() {
     try {
         auto ssl_app = create_ssl_app();
         
-        ssl_app.listen(WEB_PORT, [](auto* listen_socket) {
+        // Exclusive port: uWS defaults to SO_REUSEPORT, which lets a second
+        // process (another kraken_doa, or kraken_pr) bind the same port
+        // silently - the kernel then splits incoming connections randomly
+        // between the processes. Fail loudly instead.
+        ssl_app.listen(WEB_PORT, LIBUS_LISTEN_EXCLUSIVE_PORT, [](auto* listen_socket) {
             if (listen_socket) {
                 cout << "HTTPS server listening on port " << WEB_PORT << endl;
                 
@@ -443,7 +447,8 @@ void WebSocketServer::web_server_main() {
                 }, 500, 500);
 
             } else {
-                cerr << "FATAL ERROR: Failed to listen on HTTPS port " << WEB_PORT << endl;
+                cerr << "FATAL ERROR: Failed to listen on HTTPS port " << WEB_PORT
+                     << " - is another kraken_doa (or kraken_pr) already using it?" << endl;
                 exit(1);
             }
         });
@@ -523,7 +528,7 @@ void WebSocketServer::doa_http_server_thread() {
             .get("/*", [](auto* res, auto* /*req*/) {
                 res->writeStatus("404 Not Found")->end("Not found");
             })
-            .listen(DOA_HTTP_PORT, [](auto* listen_socket) {
+            .listen(DOA_HTTP_PORT, LIBUS_LISTEN_EXCLUSIVE_PORT, [](auto* listen_socket) {
                 if (listen_socket) {
                     cout << "DOA HTTP server listening on http://localhost:" << DOA_HTTP_PORT << "/DOA_value.html" << endl;
                 } else {

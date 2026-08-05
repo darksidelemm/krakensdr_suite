@@ -178,7 +178,14 @@ void web_server_main(CorrelationResult& correlation_result, FFTProcessingControl
         else    res->writeStatus("400 Bad Request")
                    ->writeHeader("Content-Type", "application/json")->end(out);
     }).get("/*", [](auto* res, auto* /*req*/) {
-        res->writeHeader("Content-Type", "text/html; charset=utf-8")->end(get_html_content());
+        // no-store: a phone rendering a cached copy of this page while the
+        // server is unreachable is indistinguishable from a live server with
+        // a broken WebSocket. A rendered page must mean a live server.
+        res->writeHeader("Content-Type", "text/html; charset=utf-8")
+           ->writeHeader("Cache-Control", "no-cache, no-store, must-revalidate")
+           ->writeHeader("Pragma", "no-cache")
+           ->writeHeader("Expires", "0")
+           ->end(get_html_content());
     }).ws<PerSocketData>("/*", {
         .compression = uWS::DISABLED,
         .maxPayloadLength = 16 * 1024,
@@ -447,7 +454,10 @@ void web_server_main(CorrelationResult& correlation_result, FFTProcessingControl
         .close = [](auto* /*ws*/, int, std::string_view) {
             std::cout << "WebSocket client disconnected" << std::endl;
         }
-    }).listen(WEB_PORT, [&](auto* listen_socket) {
+    // Exclusive port: uWS defaults to SO_REUSEPORT, which lets a second
+    // heimdall instance bind the same port silently - the kernel then splits
+    // incoming connections randomly between the processes. Fail loudly instead.
+    }).listen(WEB_PORT, LIBUS_LISTEN_EXCLUSIVE_PORT, [&](auto* listen_socket) {
         if (listen_socket) {
             std::cout << "Web server listening on http://localhost:" << WEB_PORT << " (uWebSockets)" << std::endl;
             
@@ -474,9 +484,13 @@ void web_server_main(CorrelationResult& correlation_result, FFTProcessingControl
                     }
                 }
             }, 50, 50);
+        } else {
+            std::cerr << "FATAL: cannot listen on web port " << WEB_PORT
+                      << " - is another heimdall instance already running?" << std::endl;
+            global_running = false;  // trigger the normal clean shutdown in main()
         }
     });
-    
+
     global_app = &app;
     app.run();
 }

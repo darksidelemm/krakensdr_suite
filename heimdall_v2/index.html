@@ -908,10 +908,20 @@
         };
         
         const connect = () => {
-            const url = `ws://${location.hostname || 'localhost'}:${location.port || 8080}/ws`;
+            const url = `ws://${location.hostname || 'localhost'}:${location.port || 8070}/ws`;
+            $('txt').textContent = 'Connecting...';
+            $('txt').className = '';
             ws = new WebSocket(url);
             ws.binaryType = 'arraybuffer';
-            
+
+            // An attempt that gets no reply at all (SYN or upgrade black-holed,
+            // e.g. a phone on a no-internet hotspot) never fires onclose and
+            // would sit in CONNECTING forever. Cap it; onclose then retries.
+            const attempt = ws;
+            setTimeout(() => {
+                if (attempt === ws && attempt.readyState === WebSocket.CONNECTING) attempt.close();
+            }, 6000);
+
             ws.onopen = () => {
                 $('txt').textContent = 'Connected';
                 $('txt').className = 'connected';
