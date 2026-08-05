@@ -10,6 +10,7 @@
 #include "station_info.hpp"
 #include "signal_processing/fft_processor.hpp"
 #include "doa_logger.hpp"
+#include "utils/status_dashboard.hpp"
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -256,10 +257,13 @@ void WebSocketServer::verify_ssl_certificates() {
     ifstream key_file(SSL_KEY_FILE);
     
     if (!cert_file.good() || !key_file.good()) {
+        // Runs on the web-server thread: no exit() here either (see the
+        // listen-failure path below for why).
+        StatusDashboard::end();
         cerr << "ERROR: Cannot read SSL certificate files" << endl;
-        cerr << "Run: openssl req -x509 -newkey rsa:4096 -keyout " << SSL_KEY_FILE 
+        cerr << "Run: openssl req -x509 -newkey rsa:4096 -keyout " << SSL_KEY_FILE
              << " -out " << SSL_CERT_FILE << " -days 365 -nodes -subj \"/CN=krakensdr\"" << endl;
-        exit(1);
+        _Exit(1);
     }
 }
 
@@ -447,9 +451,16 @@ void WebSocketServer::web_server_main() {
                 }, 500, 500);
 
             } else {
+                // exit() is NOT safe on this thread: static destructors would
+                // run while the worker threads are live and trip std::terminate
+                // on their joinable std::thread objects. Restore the terminal
+                // first (the TUI otherwise swallows the message), then leave
+                // without destructors - same rule as main()'s shutdown path.
+                StatusDashboard::end();
                 cerr << "FATAL ERROR: Failed to listen on HTTPS port " << WEB_PORT
-                     << " - is another kraken_doa (or kraken_pr) already using it?" << endl;
-                exit(1);
+                     << " - is another kraken_doa (or kraken_pr) already using it?"
+                     << " (check: ss -tlnp | grep " << WEB_PORT << ")" << endl;
+                _Exit(1);
             }
         });
         
@@ -457,8 +468,10 @@ void WebSocketServer::web_server_main() {
         ssl_app.run();
         
     } catch (const exception& e) {
+        // Same as the listen-failure path: no exit() from this thread.
+        StatusDashboard::end();
         cerr << "FATAL SSL ERROR: " << e.what() << endl;
-        exit(1);
+        _Exit(1);
     }
 }
 
