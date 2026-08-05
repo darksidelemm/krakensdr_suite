@@ -38,6 +38,7 @@ asuser() { sudo -u "$RUN_USER" "$@"; }
 if [[ "${1:-}" == "--uninstall" ]]; then
     sudo systemctl disable --now krakensdr.service 2>/dev/null || true
     sudo rm -f "$SVC" /usr/local/bin/kraken-term /usr/local/bin/kraken-wait-usb
+    sudo rm -rf /etc/systemd/system/NetworkManager-wait-online.service.d
     rm -f "$RUN_HOME/.config/autostart/kraken-term.desktop"
     sed -i '/kraken-term/d' "$RUN_HOME/.config/labwc/autostart" 2>/dev/null || true
     sed -i '/kraken-term/d' "$RUN_HOME/.config/wayfire.ini" 2>/dev/null || true
@@ -70,10 +71,24 @@ exit 0
 EOF
 sudo chmod +x /usr/local/bin/kraken-wait-usb
 
+# ------------------------------------------- cap the network-online wait ------
+# The unit waits for network-online (outbound reporting links), but a Pi booted
+# where its configured WiFi doesn't exist must not stall. Cap the wait at 30s.
+sudo mkdir -p /etc/systemd/system/NetworkManager-wait-online.service.d
+sudo tee /etc/systemd/system/NetworkManager-wait-online.service.d/timeout.conf >/dev/null <<'EOF'
+[Service]
+ExecStart=
+ExecStart=/usr/bin/nm-online -s -q --timeout=30
+EOF
+
 # ------------------------------------------------------------ systemd unit ---
 sudo tee "$SVC" >/dev/null <<EOF
 [Unit]
 Description=KrakenSDR Suite
+# Wait for network so outbound links (RDF Mapper, MQTT) come up cleanly.
+# The wait is capped at 30s by the NetworkManager-wait-online drop-in below,
+# so a missing/slow WiFi network cannot stall boot; the stack starts anyway
+# and the persistent kraken-term viewer tolerates any start delay.
 After=network-online.target
 Wants=network-online.target
 
@@ -104,26 +119,41 @@ EOF
 ok "unit written"
 
 # ------------------------------------------------------- viewer (one only) ---
-# flock covers the race where two launchers fire before either has attached;
-# list-clients covers the ordinary case; attach -d is the final backstop.
+# Persistent: retries for up to 10 min so a slow service start still gets a
+# window. Logs to /tmp/kraken-term.log for diagnosis. Only defers to clients
+# on a pty (visible terminals); a stale tty1 console client hidden under the
+# desktop is evicted by attach -d rather than blocking the window.
 sudo tee /usr/local/bin/kraken-term >/dev/null <<EOF
 #!/bin/bash
+exec >>/tmp/kraken-term.log 2>&1
+echo "--- \$(date) start (pid \$\$)"
 export TMUX_TMPDIR=/tmp
 SESSION="\${TMUX_SESSION:-$SESSION}"
+DEADLINE=\$(( \$(date +%s) + 600 ))
 
 exec 9>/tmp/kraken-term.lock
-flock -n 9 || exit 0
+flock -n 9 || { echo "another instance holds the lock; exiting"; exit 0; }
 
-for i in \$(seq 1 90); do
-    tmux has-session -t "\$SESSION" 2>/dev/null && break
-    sleep 1
+while [ "\$(date +%s)" -lt "\$DEADLINE" ]; do
+    if ! tmux has-session -t "\$SESSION" 2>/dev/null; then
+        sleep 2
+        continue
+    fi
+    if tmux list-clients -t "\$SESSION" -F '#{client_tty}' 2>/dev/null | grep -q '/dev/pts/'; then
+        echo "a desktop/ssh client is attached; done"
+        exit 0
+    fi
+    echo "launching terminal"
+    lxterminal --title="KrakenSDR" --geometry=150x45 -e "tmux attach -d -t \$SESSION" &
+    sleep 5
+    if tmux list-clients -t "\$SESSION" -F '#{client_tty}' 2>/dev/null | grep -q '/dev/pts/'; then
+        echo "attached ok"
+        exit 0
+    fi
+    echo "terminal failed to attach; retrying"
 done
-tmux has-session -t "\$SESSION" 2>/dev/null || { echo "no '\$SESSION' session"; exit 1; }
-
-tmux list-clients -t "\$SESSION" 2>/dev/null | grep -q . && exit 0
-
-lxterminal --title="KrakenSDR" --geometry=150x45 -e "tmux attach -d -t \$SESSION" &
-sleep 3
+echo "gave up after 600s with no session"
+exit 1
 EOF
 sudo chmod +x /usr/local/bin/kraken-term
 
