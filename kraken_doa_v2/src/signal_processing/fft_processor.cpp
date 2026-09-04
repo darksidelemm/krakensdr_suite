@@ -397,10 +397,10 @@ void FFTProcessor::process_channel_fft(const std::complex<float>* iq_data, size_
         // Use actual_scale which accounts for zero-padding
         float power = (real * real + imag * imag) * actual_scale + 1e-15f;
 
-        // OPTIMIZATION: Fast log10 using hardware log2f (ARM VLOG2 instruction)
+        // OPTIMIZATION: Fast log10 using hardware log2 (ARM VLOG2 instruction)
         // log10(x) = log2(x) * log10(2)
-        // This is ~60% faster than log10f() on ARM
-        float db = 10.0f * (std::log2f(power) * log10_of_2);
+        // This is ~60% faster than log10() on ARM
+        float db = 10.0f * (std::log2(power) * log10_of_2);
 
         // Store instantaneous and averaged values
         fft_magnitudes[channel][i] = db;
@@ -1035,7 +1035,7 @@ void FFTProcessor::process_beamformed_fft(BeamformedFFTData& out,
         float imag = bf_fft_out[shifted_idx][1];
 
         float power = (real * real + imag * imag) * scale + 1e-15f;
-        float db = 10.0f * (std::log2f(power) * log10_of_2);
+        float db = 10.0f * (std::log2(power) * log10_of_2);
 
         out.magnitudes[i] = db;
         out.averaged[i] = alpha * db + (1.0f - alpha) * out.averaged[i];
