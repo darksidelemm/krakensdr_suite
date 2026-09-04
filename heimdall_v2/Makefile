@@ -5,6 +5,10 @@ CC = g++
 TARGET = heimdall
 CONFIG_HEADER = config.h
 
+# GCC 9.x supports C++20 via the draft spelling (-std=c++2a), while newer
+# compilers accept the final spelling.
+CXX_STANDARD_FLAG := $(shell if $(CC) -std=c++20 -x c++ -E - </dev/null >/dev/null 2>&1; then echo -std=c++20; else echo -std=c++2a; fi)
+
 # Source files organized by module
 CORE_SOURCES = src/core/utils.cpp src/core/settings.cpp src/core/forward_comp.cpp src/core/status_dashboard.cpp
 SDR_SOURCES = src/sdr/sdr_device.cpp src/sdr/sdr_init.cpp src/sdr/sdr_pipeline.cpp src/sdr/pipeline_control.cpp src/sdr/downconverter.cpp src/sdr/kerberos_gpio.cpp
@@ -27,9 +31,9 @@ UWS_EXISTS := $(shell test -d uWebSockets && echo yes || echo no)
 EIGEN_EXISTS := $(shell pkg-config --exists eigen3 2>/dev/null && echo yes || echo no)
 
 # C++20 required for uWebSockets
-CFLAGS = -Wall -Wextra -std=c++20 -D_GNU_SOURCE -DUWS_NO_ZLIB
+CFLAGS = -Wall -Wextra $(CXX_STANDARD_FLAG) -D_GNU_SOURCE -DUWS_NO_ZLIB
 CFLAGS += -I. -Isrc -Isrc/core -Isrc/sdr -Isrc/dsp -Isrc/net -Isrc/web -Iexternal
-LDFLAGS = -lrtlsdr -lfftw3f -lpthread -lm -lz
+LDFLAGS = -lrtlsdr -lfftw3f -lpthread -lm -lz -ltbb
 
 # Add Eigen include path
 ifeq ($(EIGEN_EXISTS),yes)
@@ -134,6 +138,7 @@ deps:
 	    librtlsdr-dev \
 	    libfftw3-dev \
 	    libeigen3-dev \
+	    libtbb-dev \
 	    build-essential \
 	    git \
 	    pkg-config \

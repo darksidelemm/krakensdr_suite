@@ -1,6 +1,11 @@
 # Makefile for KrakenSDR DoA with MUSIC DoA and Raw Data Buffering
 CXX = g++
-CXXFLAGS = -std=c++20 -Ofast -Wall -Wextra -pthread
+
+# GCC 9.x supports C++20 via the draft spelling (-std=c++2a), while newer
+# compilers accept the final spelling.
+CXX_STANDARD_FLAG := $(shell if $(CXX) -std=c++20 -x c++ -E - </dev/null >/dev/null 2>&1; then echo -std=c++20; else echo -std=c++2a; fi)
+
+CXXFLAGS = $(CXX_STANDARD_FLAG) -Ofast -Wall -Wextra -pthread
 INCLUDES = -Iinclude -IuWebSockets/src -IuWebSockets/uSockets/src -I/usr/include/eigen3
 LDFLAGS = -L/usr/local/lib
 LIBS = -lfftw3f -lliquid -lopus -lssl -lcrypto -lz -lsqlite3
