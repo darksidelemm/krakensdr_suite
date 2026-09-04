@@ -175,6 +175,7 @@ constexpr int INITIAL_FILL_TARGET = AUDIO_SAMPLE_RATE / 10;   // 0.1 seconds
 
 // File Configuration
 constexpr const char* HTML_FILE = "kraken_doa.html";
+constexpr const char* FREQUENCY_PRESETS_FILE = "frequency_presets.json";
 constexpr const char* SSL_CERT_FILE = "server.crt";
 constexpr const char* SSL_KEY_FILE = "server.key";
 

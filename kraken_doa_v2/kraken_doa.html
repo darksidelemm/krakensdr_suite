@@ -78,6 +78,8 @@ h3 {color:#7cb3f0;margin:0 0 10px 0;font-size:15px;border-bottom:1px solid #333;
 /* Top bar */
 .top-bar {background:#16213e;border-bottom:1px solid #0f3460;padding:4px 10px;display:flex;align-items:center;gap:15px;min-height:48px;flex-shrink:0;flex-wrap:wrap;transition:background-color 0.3s ease}
 .top-bar .tb-group {display:flex;align-items:center;gap:6px}
+.top-bar .freq-control {display:flex;flex-direction:column;align-items:stretch;gap:4px}
+.top-bar .freq-preset-select {width:100%;min-width:0}
 .top-bar .tb-label {font-size:13px;color:#888}
 .top-bar .tb-sep {width:1px;height:24px;background:#0f3460;margin:0 5px}
 .top-bar input[type="number"] {background:#1a1a2e;border:1px solid #0f3460;color:#e0e0e0;padding:4px 6px;border-radius:3px;font-size:13px;width:75px}
@@ -157,6 +159,7 @@ h3 {color:#7cb3f0;margin:0 0 10px 0;font-size:15px;border-bottom:1px solid #333;
   margin-left:8px;
   font-weight:normal;
 }
+.radius-presets {display:flex;gap:4px;flex-wrap:wrap}
 
 /* Spectrum and DoA area */
 .spectrum-doa-container {flex:1;display:flex;overflow:hidden;padding:10px;gap:10px}
@@ -371,6 +374,14 @@ h3 {color:#7cb3f0;margin:0 0 10px 0;font-size:15px;border-bottom:1px solid #333;
             <label>Radius:</label>
             <input type="number" id="arr" value="50" min="10" step="1" style="width:60px" oninput="sar()" onchange="sar()">
             <span style="font-size:10px">mm</span>
+          </div>
+          <div class="ctrl-row">
+            <label>Presets:</label>
+            <div class="radius-presets">
+              <button class="btn sm" onclick="setRadiusPreset(300)">QI 2m</button>
+              <button class="btn sm" onclick="setRadiusPreset(140)">QI 70cm</button>
+              <button class="btn sm" onclick="setRadiusPreset(60)">QI 23cm</button>
+            </div>
           </div>
           <div id="uca-spacing-factor" style="font-size:10px;color:#888;margin-top:4px;"></div>
         </div>
@@ -911,19 +922,24 @@ h3 {color:#7cb3f0;margin:0 0 10px 0;font-size:15px;border-bottom:1px solid #333;
       <button class="menu-btn" onclick="toggleSidebar()" title="Settings">☰</button>
       <!-- Center Frequency (SDR#-style) - FIRST -->
       <div class="tb-group">
-        <div class="freq-selector" id="freq-selector">
-          <div class="freq-digit" data-pos="8"><span class="hover-upper"></span><span class="hover-lower"></span>0</div>
-          <div class="freq-digit" data-pos="7"><span class="hover-upper"></span><span class="hover-lower"></span>0</div>
-          <div class="freq-digit" data-pos="6"><span class="hover-upper"></span><span class="hover-lower"></span>0</div>
-          <span class="freq-sep">.</span>
-          <div class="freq-digit" data-pos="5"><span class="hover-upper"></span><span class="hover-lower"></span>1</div>
-          <div class="freq-digit" data-pos="4"><span class="hover-upper"></span><span class="hover-lower"></span>0</div>
-          <div class="freq-digit" data-pos="3"><span class="hover-upper"></span><span class="hover-lower"></span>0</div>
-          <span class="freq-sep">.</span>
-          <div class="freq-digit" data-pos="2"><span class="hover-upper"></span><span class="hover-lower"></span>0</div>
-          <div class="freq-digit" data-pos="1"><span class="hover-upper"></span><span class="hover-lower"></span>0</div>
-          <div class="freq-digit" data-pos="0"><span class="hover-upper"></span><span class="hover-lower"></span>0</div>
-          <span class="freq-label">MHz</span>
+        <div class="freq-control">
+          <div class="freq-selector" id="freq-selector">
+            <div class="freq-digit" data-pos="8"><span class="hover-upper"></span><span class="hover-lower"></span>0</div>
+            <div class="freq-digit" data-pos="7"><span class="hover-upper"></span><span class="hover-lower"></span>0</div>
+            <div class="freq-digit" data-pos="6"><span class="hover-upper"></span><span class="hover-lower"></span>0</div>
+            <span class="freq-sep">.</span>
+            <div class="freq-digit" data-pos="5"><span class="hover-upper"></span><span class="hover-lower"></span>1</div>
+            <div class="freq-digit" data-pos="4"><span class="hover-upper"></span><span class="hover-lower"></span>0</div>
+            <div class="freq-digit" data-pos="3"><span class="hover-upper"></span><span class="hover-lower"></span>0</div>
+            <span class="freq-sep">.</span>
+            <div class="freq-digit" data-pos="2"><span class="hover-upper"></span><span class="hover-lower"></span>0</div>
+            <div class="freq-digit" data-pos="1"><span class="hover-upper"></span><span class="hover-lower"></span>0</div>
+            <div class="freq-digit" data-pos="0"><span class="hover-upper"></span><span class="hover-lower"></span>0</div>
+            <span class="freq-label">MHz</span>
+          </div>
+          <select id="freq-preset-select" class="freq-preset-select" onchange="applyFrequencyPreset(this.value)" title="Preset center frequencies loaded from frequency_presets.json">
+            <option value="">Preset frequency</option>
+          </select>
         </div>
       </div>
       <!-- KrakenSDR Wideband (downconverter) variant controls - shown only when
@@ -3742,6 +3758,79 @@ let FREQ_MIN = 24;    // MHz
 let FREQ_MAX = 1766;  // MHz
 let freqUserChanging = false;  // Flag to prevent server echo flicker
 let freqUserChangeTimeout = null;
+let frequencyPresets = [];
+
+const DEFAULT_FREQUENCY_PRESETS = [
+  {label:'145.3 MHz', frequency_mhz:145.3},
+  {label:'144.390 MHz', frequency_mhz:144.39},
+  {label:'439.400 MHz', frequency_mhz:439.4},
+  {label:'439.425 MHz', frequency_mhz:439.425},
+];
+
+function normalizeFrequencyPreset(item) {
+  let freq = NaN;
+  let label = '';
+  if (typeof item === 'number') {
+    freq = item;
+  } else if (typeof item === 'string') {
+    freq = parseFloat(item);
+  } else if (item && typeof item === 'object') {
+    freq = parseFloat(item.frequency_mhz ?? item.freq_mhz ?? item.mhz ?? item.frequency);
+    label = item.label || item.name || '';
+  }
+  if (!Number.isFinite(freq)) return null;
+  freq = Math.round(freq * 1000) / 1000;
+  return {label: label || freq.toFixed(3) + ' MHz', frequency_mhz: freq};
+}
+
+function renderFrequencyPresets(presets) {
+  const sel = $id('freq-preset-select');
+  if (!sel) return;
+  frequencyPresets = presets.map(normalizeFrequencyPreset).filter(Boolean);
+  sel.innerHTML = '<option value="">Preset frequency</option>';
+  frequencyPresets.forEach(p => {
+    const opt = document.createElement('option');
+    opt.value = p.frequency_mhz.toFixed(3);
+    opt.textContent = p.label;
+    sel.appendChild(opt);
+  });
+  updateFrequencyPresetSelection(currentCenterFreq);
+}
+
+async function loadFrequencyPresets() {
+  try {
+    const response = await fetch('/frequency_presets.json', {cache:'no-store'});
+    if (!response.ok) throw new Error('HTTP ' + response.status);
+    const data = await response.json();
+    renderFrequencyPresets(Array.isArray(data) ? data : data.presets || []);
+  } catch (err) {
+    console.warn('Failed to load frequency presets:', err);
+    renderFrequencyPresets(DEFAULT_FREQUENCY_PRESETS);
+  }
+}
+
+function updateFrequencyPresetSelection(freqMhz) {
+  const sel = $id('freq-preset-select');
+  if (!sel || document.activeElement === sel) return;
+  const match = frequencyPresets.find(p => Math.abs(p.frequency_mhz - freqMhz) < 0.0005);
+  sel.value = match ? match.frequency_mhz.toFixed(3) : '';
+}
+
+function applyFrequencyPreset(value) {
+  const freq = parseFloat(value);
+  if (!Number.isFinite(freq)) return;
+  const clamped = Math.max(FREQ_MIN, Math.min(FREQ_MAX, freq));
+
+  freqUserChanging = true;
+  if (freqUserChangeTimeout) clearTimeout(freqUserChangeTimeout);
+  freqUserChangeTimeout = setTimeout(() => { freqUserChanging = false; }, 500);
+
+  currentCenterFreq = clamped;
+  updateFreqDisplay(clamped, true);
+  updateFrequencyPresetSelection(clamped);
+  decimatorInfo.forEach(dec => refreshDecimatorPanelItem(dec.id));
+  sendFreqChange(clamped);
+}
 
 // KrakenSDR Wideband (downconverter) variant state, from the backend's
 // {"wb_variant":{...}} message (sent on connect and on side/ring changes).
@@ -3936,6 +4025,7 @@ function updateFreqDisplay(freq, force = false) {
   // Update spacing factor display when frequency changes
   updateSpacingFactor();
   updateWbReadout();
+  updateFrequencyPresetSelection(freq);
 }
 
 // Change frequency by adjusting a specific digit position
@@ -3965,6 +4055,7 @@ function changeFreqDigit(pos, delta) {
   // Don't call drawBox() here - let the server response trigger redraw
   // This prevents the tuning bar from jumping before the spectrum updates
   currentCenterFreq = newFreq;
+  updateFrequencyPresetSelection(newFreq);
   decimatorInfo.forEach(dec => refreshDecimatorPanelItem(dec.id));
   sendFreqChange(newFreq);
 }
@@ -4474,6 +4565,19 @@ function sar() {
       send('RADIUS:' + rv);
     }
   }, 500);
+}
+
+function setRadiusPreset(radiusMm) {
+  const input = $id('arr');
+  if (!input) return;
+  input.value = radiusMm;
+  if (radiusSendTimeout) {
+    clearTimeout(radiusSendTimeout);
+    radiusSendTimeout = null;
+  }
+  drawUCADiagram();
+  updateSpacingFactor();
+  send('RADIUS:' + radiusMm);
 }
 
 // Live spacing update (no Set button) - same pattern as the radius box:
@@ -7417,6 +7521,7 @@ window.addEventListener('load',()=>{
 
   createPlot();
   initFreqSelector();
+  loadFrequencyPresets();
   updateFreqLimits();
   drawArrayDiagrams();
   generateCustomPositionsTable();

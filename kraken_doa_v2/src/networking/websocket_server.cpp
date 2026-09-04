@@ -294,6 +294,21 @@ uWS::SSLApp WebSocketServer::create_ssl_app() {
                ->writeHeader("Cache-Control", "no-cache")  // Disable cache during debugging
                ->end(js_content);
         })
+        .get("/frequency_presets.json", [](auto* res, auto* /*req*/) {
+            ifstream file(FREQUENCY_PRESETS_FILE, ios::binary);
+            if (!file.is_open()) {
+                res->writeStatus("404 Not Found")->end("frequency_presets.json not found");
+                return;
+            }
+
+            stringstream buffer;
+            buffer << file.rdbuf();
+            res->writeHeader("Content-Type", "application/json; charset=utf-8")
+               ->writeHeader("Cache-Control", "no-cache, no-store, must-revalidate")
+               ->writeHeader("Pragma", "no-cache")
+               ->writeHeader("Expires", "0")
+               ->end(buffer.str());
+        })
         .get("/recordings/*", [](auto* res, auto* req) {
             // Download a recording from the fixed doa_recordings/ folder. Only a
             // sanitized base filename is honored, so no other device files are
