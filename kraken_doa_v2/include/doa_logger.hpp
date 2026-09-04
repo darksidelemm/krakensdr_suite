@@ -31,6 +31,7 @@ struct DoaRecord {
                                    // (parabolic-interpolated peak), as in DOA_value.html
     double   confidence = 0.0;
     double   power_db = 0.0;
+    double   fft_peak_power_db = -120.0; // Legacy-style in-band FFT peak, appended to CSV
     uint64_t freq_hz = 0;
     std::string antenna;           // "UCA" / "ULA" / "Custom"
     std::string station_id_csv;    // comma/newline-stripped callsign

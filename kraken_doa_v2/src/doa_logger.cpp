@@ -7,6 +7,7 @@
 #include "decimator_manager.hpp"
 #include "scanner_manager.hpp"
 #include "station_info.hpp"
+#include "signal_processing/fft_processor.hpp"
 #include "signal_processing/music_processor.hpp"
 
 #include <sqlite3.h>
@@ -82,6 +83,13 @@ std::vector<DoaRecord> capture_doa_records() {
 
         float eigen_ratio = dec->music_processor->getEigenvalueRatio();
         float power_db = 10.0f * std::log10(std::max(eigen_ratio, 0.001f));
+        float fft_peak_power_db = -120.0f;
+        if (dec->decimator) {
+            int fft_channel = active_channel.load(std::memory_order_relaxed);
+            float bw_hz = dec->decimator->getBandwidthMhz() * 1e6f;
+            fft_peak_power_db = FFTProcessor::get_peak_magnitude_in_range(
+                fft_channel, dec->frequency_offset_hz, bw_hz);
+        }
 
         float center_freq = ChannelManager::get_frequency(active_channel.load());
         float freq_hz = center_freq + dec->frequency_offset_hz;
@@ -129,6 +137,7 @@ std::vector<DoaRecord> capture_doa_records() {
         rec.app_bearing = app_bearing;
         rec.confidence = confidence;
         rec.power_db = power_db;
+        rec.fft_peak_power_db = fft_peak_power_db;
         rec.freq_hz = static_cast<uint64_t>(freq_hz);
         rec.antenna = ant_type;
         rec.station_id_csv = station_id_csv;
@@ -174,6 +183,11 @@ std::string format_doa_csv_line(const DoaRecord& rec) {
     for (double v : rec.spectrum) {
         line << ", " << std::setprecision(2) << v;
     }
+    // Appended after the legacy 360-value spectrum so existing fixed-column
+    // readers keep seeing the original fields unchanged. This is the
+    // old-krakensdr-style FFT peak in the selected VFO bandwidth; field 4
+    // remains the newer eigen-ratio-derived coherence power.
+    line << ", " << std::setprecision(1) << rec.fft_peak_power_db;
     line << " \n";
     return line.str();
 }
