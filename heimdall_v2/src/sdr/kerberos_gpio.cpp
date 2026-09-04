@@ -59,6 +59,7 @@ int open_header_gpiochip() {
 
 // Push `bits` to the hardware. Caller holds gpio_mutex.
 bool write_lines_locked(uint64_t bits) {
+#ifdef GPIO_V2_LINE_SET_VALUES_IOCTL
     struct gpio_v2_line_values values;
     std::memset(&values, 0, sizeof(values));
     values.mask = 0b11;   // both requested lines
@@ -68,6 +69,17 @@ bool write_lines_locked(uint64_t bits) {
                   << std::strerror(errno) << std::endl;
         return false;
     }
+#else
+    struct gpiohandle_data values;
+    std::memset(&values, 0, sizeof(values));
+    values.values[0] = (bits & 0b01) ? 1 : 0;
+    values.values[1] = (bits & 0b10) ? 1 : 0;
+    if (ioctl(line_fd, GPIOHANDLE_SET_LINE_VALUES_IOCTL, &values) < 0) {
+        std::cerr << "Kerberos switches: GPIO write failed: "
+                  << std::strerror(errno) << std::endl;
+        return false;
+    }
+#endif
     current_bits = bits;
     return true;
 }
@@ -91,6 +103,9 @@ bool kerberos_gpio_init() {
         return false;
     }
 
+    int requested_fd = -1;
+
+#ifdef GPIO_V2_GET_LINE_IOCTL
     struct gpio_v2_line_request req;
     std::memset(&req, 0, sizeof(req));
     req.offsets[0] = KERBEROS_SW_GPIO_ANT1;
@@ -105,8 +120,25 @@ bool kerberos_gpio_init() {
     req.config.attrs[0].mask = 0b11;
 
     const int rc = ioctl(chip_fd, GPIO_V2_GET_LINE_IOCTL, &req);
+    requested_fd = req.fd;
+#else
+    struct gpiohandle_request req;
+    std::memset(&req, 0, sizeof(req));
+    req.lineoffsets[0] = KERBEROS_SW_GPIO_ANT1;
+    req.lineoffsets[1] = KERBEROS_SW_GPIO_ANT2;
+    req.lines = 2;
+    std::strncpy(req.consumer_label, "heimdall-kerberos",
+                 sizeof(req.consumer_label) - 1);
+    req.flags = GPIOHANDLE_REQUEST_OUTPUT;
+    // Idle antenna selection driven from the moment the lines are claimed.
+    req.default_values[0] = 1;  // ANT1=1
+    req.default_values[1] = 0;  // ANT2=0
+
+    const int rc = ioctl(chip_fd, GPIO_GET_LINEHANDLE_IOCTL, &req);
+    requested_fd = req.fd;
+#endif
     close(chip_fd);
-    if (rc < 0 || req.fd < 0) {
+    if (rc < 0 || requested_fd < 0) {
         std::cerr << "Kerberos switches: failed to claim GPIO "
                   << KERBEROS_SW_GPIO_ANT1 << "/" << KERBEROS_SW_GPIO_ANT2
                   << ": " << std::strerror(errno)
@@ -114,7 +146,7 @@ bool kerberos_gpio_init() {
         return false;
     }
 
-    line_fd = req.fd;
+    line_fd = requested_fd;
     current_bits = 0b01;
     saved_bits = 0b01;
     noise_path_engaged = false;

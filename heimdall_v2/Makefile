@@ -33,7 +33,7 @@ EIGEN_EXISTS := $(shell pkg-config --exists eigen3 2>/dev/null && echo yes || ec
 # C++20 required for uWebSockets
 CFLAGS = -Wall -Wextra $(CXX_STANDARD_FLAG) -D_GNU_SOURCE -DUWS_NO_ZLIB
 CFLAGS += -I. -Isrc -Isrc/core -Isrc/sdr -Isrc/dsp -Isrc/net -Isrc/web -Iexternal
-LDFLAGS = -lrtlsdr -lfftw3f -lpthread -lm -lz -ltbb
+LDFLAGS = -lrtlsdr -lfftw3f -lpthread -lm -lz
 
 # Add Eigen include path
 ifeq ($(EIGEN_EXISTS),yes)
@@ -138,7 +138,6 @@ deps:
 	    librtlsdr-dev \
 	    libfftw3-dev \
 	    libeigen3-dev \
-	    libtbb-dev \
 	    build-essential \
 	    git \
 	    pkg-config \

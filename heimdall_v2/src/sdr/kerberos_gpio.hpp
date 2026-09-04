@@ -10,10 +10,11 @@
 // so the directional-coupler noise is the only thing the tuners see - which
 // is what makes fully automatic calibration valid again on this hardware.
 //
-// Implemented with the linux/gpio.h v2 character-device API on /dev/gpiochipN
-// (pigpio does not work on the Pi 5's RP1). The header controller is found by
-// its "pinctrl-*" chip label (rp1 on Pi 5, bcm2711 on Pi 4, ...), and the
-// whole module only activates on a Raspberry Pi (/proc/device-tree/model).
+// Implemented with linux/gpio.h character-device ioctls on /dev/gpiochipN
+// (v2 when available, otherwise the older line-handle API from Ubuntu 20.04).
+// The header controller is found by its "pinctrl-*" chip label (rp1 on Pi 5,
+// bcm2711 on Pi 4, ...), and the whole module only activates on a Raspberry Pi
+// (/proc/device-tree/model).
 
 // Claim the GPIO lines and drive the idle state (ANT1=1, ANT2=0). Returns
 // false - with the reason on stderr - when not running on a Raspberry Pi or

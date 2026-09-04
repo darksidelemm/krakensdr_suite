@@ -6,10 +6,10 @@
 #include "../core/buffer_pool.hpp"
 #include "../net/tcp_data_server.hpp"  // Need full definition to call methods
 #include "../net/rtl_tcp_server.hpp"   // Need full definition to call methods
-#include <execution>
 #include <numeric>
 #include <iostream>
 #include <algorithm>
+#include <thread>
 
 // Global L2 buffer
 moodycamel::BlockingConcurrentQueue<std::vector<ComplexBuffer>> l2_buffer;
@@ -271,7 +271,7 @@ void sample_processor(const std::vector<std::unique_ptr<SDRDevice>>& devices) {
                      << ", Physical device: " << device->device_id
                      << ") buffer size=" << raw_set[i].size() << std::endl;
 
-                if (device->index != i) [[unlikely]] {
+                if (device->index != i) {
                     std::cerr << "ERROR: Device index mismatch! Position " << i
                          << " has device with index " << device->index << std::endl;
                 }
@@ -349,12 +349,17 @@ void conversion_worker(const std::vector<std::unique_ptr<SDRDevice>>& devices,
 
         auto complex_samples = l2_buffer_pool.acquire();
         complex_samples.resize(num_elements);
-        std::for_each(std::execution::par, dev_idx.begin(), dev_idx.end(), [&](int i) {
-            auto& sb = raw_set[i];
-            // sb.size() is bytes of interleaved IQ; divide by 2 for complex count
-            complex_samples[i] = samples_to_complex_with_compensation(
-                sb.data(), static_cast<int>(sb.size()) / 2, devices[i]->index);
-        });
+        std::vector<std::thread> conversion_threads;
+        conversion_threads.reserve(num_elements);
+        for (int i : dev_idx) {
+            conversion_threads.emplace_back([&, i]() {
+                auto& sb = raw_set[i];
+                // sb.size() is bytes of interleaved IQ; divide by 2 for complex count
+                complex_samples[i] = samples_to_complex_with_compensation(
+                    sb.data(), static_cast<int>(sb.size()) / 2, devices[i]->index);
+            });
+        }
+        for (auto& th : conversion_threads) th.join();
 
         // -------- Broadcast / handoff (every set, in order) --------
         if (tcp_data_server) tcp_data_server->broadcast_data(complex_samples);
