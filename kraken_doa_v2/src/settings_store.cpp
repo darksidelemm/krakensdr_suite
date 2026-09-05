@@ -102,6 +102,7 @@ namespace {
         {"log_format",               "LOG_FORMAT:",               VType::STRING, "sqlite"},
         // Spectrum / waterfall display preferences (UI:* keys)
         {"doa_convention",           "UI:DOA_CONV:",              VType::STRING, "compass"},
+        {"spectrum_zoom",            "UI:FFT_ZOOM:",              VType::NUMBER, "1"},
         {"waterfall_fft_ymax",       "UI:FFT_Y:",                 VType::NUMBER, "60"},
         {"waterfall_speed",          "UI:WF_SPEED:",              VType::NUMBER, "5"},
         {"waterfall_colormap",       "UI:WF_COLORMAP:",           VType::STRING, "sdryoussef"},

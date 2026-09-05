@@ -179,6 +179,7 @@ h3 {color:#7cb3f0;margin:0 0 10px 0;font-size:15px;border-bottom:1px solid #333;
 .wf-controls input,.wf-controls select {background:#1a1a2e;border:1px solid #0f3460;color:#e0e0e0;padding:3px 5px;border-radius:2px;font-size:12px}
 .wf-controls input[type="number"] {width:45px}
 .wf-controls input[type="range"] {width:60px}
+.wf-controls .zoom-control input[type="range"] {width:110px}
 
 /* DoA panel */
 .doa-panel {width:350px;min-width:310px;max-width:430px;background:#1a1a2e;border:1px solid #0f3460;border-radius:4px;overflow-y:auto;display:flex;flex-direction:column}
@@ -605,16 +606,10 @@ h3 {color:#7cb3f0;margin:0 0 10px 0;font-size:15px;border-bottom:1px solid #333;
       </div>
       <div class="sb-content">
         <div class="ctrl-row">
-          <label>FFT Size:</label>
-          <select id="fft-size-sel" onchange="setFFTSize(this.value)">
-            <option value="1024">1024</option>
-            <option value="2048">2048</option>
-            <option value="4096">4096</option>
-            <option value="8192">8192</option>
-            <option value="16384" selected>16384</option>
-            <option value="32768">32768</option>
-            <option value="65536">65536</option>
-          </select>
+          <label>FFT Points:</label>
+          <input type="range" id="fft-size-slider" class="slider" min="0" max="6" step="1" value="4"
+                 oninput="previewFFTSize(this.value)" onchange="setFFTSizeIndex(this.value)">
+          <span class="sv" id="fft-size-val">16384</span>
         </div>
         <div class="ctrl-row">
           <label>Downsampling:</label>
@@ -1027,6 +1022,8 @@ h3 {color:#7cb3f0;margin:0 0 10px 0;font-size:15px;border-bottom:1px solid #333;
           </div>
         </div>
         <div class="wf-controls" id="wf-controls-bar">
+          <label class="zoom-control">Zoom:<input type="range" id="fft-zoom" min="1" max="20" value="1" step="0.5" oninput="updateSpectrumZoom(this.value);sendUI('FFT_ZOOM',this.value)"><span id="fft-zoom-val">1.0x</span></label>
+          <span style="color:#555">|</span>
           <label>FFT Y:<input type="range" id="fft-ymax" min="10" max="100" value="60" step="10" oninput="updateFFTYAxis(this.value);sendUI('FFT_Y',this.value)" style="width:50px"><span id="fft-ymax-val">60</span></label>
           <span style="color:#555">|</span>
           <label>Speed: <input type="range" id="wf-speed" min="1" max="10" value="5" oninput="updateWaterfallSpeed(this.value);sendUI('WF_SPEED',this.value)"></label>
@@ -1080,6 +1077,7 @@ let ws,fftPlot,audioEngine,frameCount=0,lastTime=Date.now(),activeChannel=0,curr
     audioInitialized=false,currentBandwidth=7,currentCenterFreq=100,currentFrequencies=[],
     currentMagnitudes=[],isDragging=false,dragStartX=0,isDraggingEdge=false,draggedEdge=null,pendingOffsetTimeout=null,
     dragStartBandwidth=null,dragStartOffset=null,activeDecimatorId=0,currentEdgeClip=0.8,fullFrequencies=[],fullMagnitudes=[],
+    currentSpectrumZoom=1,
     isScrollDragging=false,scrollDragStartX=0,scrollDragStartY=0,scrollDragStartFreq=0,scrollDragSavedBoxes=null,scrollDragLock=false,scrollDragMoved=false,
     lastFreqSendTime=0,freqSendThrottleMs=50,
     currentFreqOffset=0,currentFreqOffset2=0,doaPlots={},widebandEnabled=false,fbAveragingEnabled=false,
@@ -1124,6 +1122,7 @@ const bwo=[
   {decimation:1200,bandwidth:0.002,name:"2 kHz"},
   {decimation:2400,bandwidth:0.001,name:"1 kHz"}
 ];
+const FFT_SIZE_OPTIONS=[1024,2048,4096,8192,16384,32768,65536];
 // Minimum bandwidth index to prevent stack overflow with high decimation VLAs
 // Index 24 = 6 kHz (decimation 400), safe for stack-allocated arrays
 const MIN_BW_INDEX = 24;
@@ -1387,6 +1386,20 @@ class WaterfallDisplay {
     }
     this.ctx.putImageData(this.imageData, 0, 0);
     this.initialized = true;
+  }
+
+  clear() {
+    if (!this.initialized || !this.imageData) return;
+    const data = this.imageData.data;
+    for (let i = 0; i < data.length; i += 4) {
+      data[i] = 0;
+      data[i + 1] = 0;
+      data[i + 2] = 0;
+      data[i + 3] = 255;
+    }
+    this.ctx.putImageData(this.imageData, 0, 0);
+    if (this.overlayCtx) this.overlayCtx.clearRect(0, 0, this.width, this.height);
+    this.lastFrequencies = [];
   }
 
   // Add new FFT line to waterfall (scrolls existing data down)
@@ -1655,6 +1668,21 @@ function updateFFTYAxis(value) {
   if (fftPlot) {
     fftPlot.setScale('y', {min: 0, max: fftYMax});
   }
+}
+
+function updateSpectrumZoom(value) {
+  let zoom = parseFloat(value);
+  if (!isFinite(zoom)) zoom = 1;
+  zoom = Math.max(1, Math.min(20, zoom));
+  currentSpectrumZoom = zoom;
+
+  const slider = $id('fft-zoom');
+  const label = $id('fft-zoom-val');
+  if (slider && parseFloat(slider.value) !== zoom) slider.value = zoom;
+  if (label) label.textContent = zoom.toFixed(zoom % 1 === 0 ? 0 : 1) + 'x';
+
+  if (waterfall) waterfall.clear();
+  applyClip();
 }
 
 function updateWaterfallRange() {
@@ -2594,12 +2622,15 @@ function applyUiSetting(rest) {
   const i = rest.indexOf(':');
   if (i < 0) return;
   const key = rest.substring(0, i), val = rest.substring(i + 1);
-  const ids = {FFT_Y:'fft-ymax', WF_SPEED:'wf-speed', WF_COLORMAP:'wf-colormap',
+  const ids = {FFT_ZOOM:'fft-zoom', FFT_Y:'fft-ymax', WF_SPEED:'wf-speed', WF_COLORMAP:'wf-colormap',
                WF_MIN:'wf-min', WF_MAX:'wf-max', WF_AUTO:'wf-autorange',
                DOA_CONV:'doa-convention'};
   const el = $id(ids[key]);
   if (!el || document.activeElement === el) return;
   switch (key) {
+    case 'FFT_ZOOM':
+      if (parseFloat(el.value) !== parseFloat(val)) { el.value = val; updateSpectrumZoom(val); }
+      break;
     case 'FFT_Y':
       if (el.value != val) { el.value = val; updateFFTYAxis(val); }
       break;
@@ -5067,6 +5098,7 @@ function sec() {
   if(c>=0.1&&c<=1) {
     currentEdgeClip=c;
     $id('cec').textContent='Current: '+(c*100).toFixed(0)+'%';
+    if (waterfall) waterfall.clear();
     applyClip();
     send('EDGE_CLIP:'+c.toFixed(2));
   }
@@ -5076,11 +5108,13 @@ function applyClip() {
   if(!fullFrequencies.length||!fullMagnitudes.length||!fftPlot)return;
   const tp=fullFrequencies.length;
 
-  // Apply edge clipping in both normal and wideband modes
-  const pts=Math.floor(tp*currentEdgeClip);
+  // Apply edge clipping and display zoom in both normal and wideband modes.
+  // Zoom is centered on the received spectrum and does not alter tuner state.
+  let pts=Math.floor(tp*currentEdgeClip/currentSpectrumZoom);
+  pts=Math.max(8,Math.min(tp,pts));
   const edge=Math.floor((tp-pts)/2);
-  currentFrequencies=fullFrequencies.slice(edge,tp-edge);
-  currentMagnitudes=fullMagnitudes.slice(edge,tp-edge);
+  currentFrequencies=fullFrequencies.slice(edge,edge+pts);
+  currentMagnitudes=fullMagnitudes.slice(edge,edge+pts);
 
   if(currentFrequencies.length>0&&currentMagnitudes.length>0) {
     fftPlot.setData([currentFrequencies,currentMagnitudes]);
@@ -5121,13 +5155,44 @@ function ua(v) {
 }
 
 // FFT Settings functions
-let currentFFTSize = 4096;
+let currentFFTSize = 16384;
 let currentFFTDecimation = 8;
 
 function setFFTSize(size) {
   size = parseInt(size);
   if (isNaN(size) || size < 1024 || size > 65536) return;
   send('FFT_SIZE:' + size);
+}
+
+function fftSizeToIndex(size) {
+  let bestIdx = 0;
+  let bestDiff = Infinity;
+  for (let i = 0; i < FFT_SIZE_OPTIONS.length; i++) {
+    const diff = Math.abs(FFT_SIZE_OPTIONS[i] - size);
+    if (diff < bestDiff) {
+      bestDiff = diff;
+      bestIdx = i;
+    }
+  }
+  return bestIdx;
+}
+
+function previewFFTSize(idx) {
+  idx = parseInt(idx);
+  if (isNaN(idx)) idx = fftSizeToIndex(currentFFTSize);
+  idx = Math.max(0, Math.min(FFT_SIZE_OPTIONS.length - 1, idx));
+  const size = FFT_SIZE_OPTIONS[idx];
+  const label = $id('fft-size-val');
+  if (label) label.textContent = size;
+  const pointsEl = $id('fft-points-sent');
+  if (pointsEl) pointsEl.textContent = Math.floor(size / currentFFTDecimation);
+}
+
+function setFFTSizeIndex(idx) {
+  idx = parseInt(idx);
+  if (isNaN(idx)) idx = fftSizeToIndex(currentFFTSize);
+  idx = Math.max(0, Math.min(FFT_SIZE_OPTIONS.length - 1, idx));
+  setFFTSize(FFT_SIZE_OPTIONS[idx]);
 }
 
 function setFFTDecimation(dec) {
@@ -5140,10 +5205,15 @@ function updateFFTSettingsUI(fftSize, decimation) {
   currentFFTSize = fftSize;
   currentFFTDecimation = decimation;
 
-  // Update dropdowns
+  // Update controls
+  const sizeSlider = $id('fft-size-slider');
+  const sizeLabel = $id('fft-size-val');
   const sizeSel = $id('fft-size-sel');
   const decSel = $id('fft-dec-sel');
 
+  const sizeIdx = fftSizeToIndex(fftSize);
+  if (sizeSlider) sizeSlider.value = sizeIdx;
+  if (sizeLabel) sizeLabel.textContent = fftSize;
   if (sizeSel) sizeSel.value = fftSize;
   if (decSel) decSel.value = decimation;
 
@@ -5151,6 +5221,8 @@ function updateFFTSettingsUI(fftSize, decimation) {
   const pointsSent = Math.floor(fftSize / decimation);
   const pointsEl = $id('fft-points-sent');
   if (pointsEl) pointsEl.textContent = pointsSent;
+
+  if (waterfall) waterfall.clear();
 }
 
 function requestFFTSettings() {
@@ -6289,6 +6361,7 @@ function connect() {
       
       fullFrequencies=freq;
       fullMagnitudes=mag;
+      if(!fftPlot)createPlot();
       applyClip();
 
       // Deferred tuning-bar re-sync: the plot scale now reflects this frame,
@@ -6297,8 +6370,6 @@ function connect() {
         finishScrollSync();
       }
 
-      if(!fftPlot)createPlot();
-      
       frameCount++;
       const now=Date.now();
       if(now-lastTime>=1000) {
