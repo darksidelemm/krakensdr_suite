@@ -183,6 +183,7 @@ def chasemapper_message(
     recalculate_confidence: bool,
 ) -> dict:
     raw_doa = list(reversed(record.raw_doa)) if flip_raw_doa else record.raw_doa
+    raw_doa = [round(value, 3) for value in raw_doa]
     confidence = (
         recalculate_legacy_confidence(record.raw_doa)
         if recalculate_confidence
@@ -196,7 +197,7 @@ def chasemapper_message(
         "source": source or record.station_id or "KrakenSDR",
         "timestamp": record.timestamp_ms / 1000.0,
         "confidence": confidence,
-        "power": record.fft_peak_power_db,
+        "power": round(record.fft_peak_power_db, 3),
         "raw_bearing_angles": list(range(DOA_VALUES_COUNT)),
         "raw_doa": raw_doa,
     }

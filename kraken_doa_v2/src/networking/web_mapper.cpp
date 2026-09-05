@@ -743,7 +743,7 @@ string build_chasemapper_json(const DoaRecord& rec, const StationLocation& sl) {
        << ",\"source\":\"" << json_escape(sl.id.empty() ? rec.station_id_csv : sl.id) << "\""
        << ",\"timestamp\":" << fmt_fixed(timestamp_sec, 3)
        << ",\"confidence\":" << fmt_num(confidence)
-       << ",\"power\":" << fmt_num(rec.fft_peak_power_db)
+       << ",\"power\":" << fmt_fixed(rec.fft_peak_power_db, 3)
        << ",\"raw_bearing_angles\":[";
     for (int i = 0; i < 360; i++) {
         if (i) js << ",";
@@ -752,7 +752,7 @@ string build_chasemapper_json(const DoaRecord& rec, const StationLocation& sl) {
     js << "],\"raw_doa\":[";
     for (size_t i = 0; i < rec.spectrum.size(); i++) {
         if (i) js << ",";
-        js << fmt_num(rec.spectrum[rec.spectrum.size() - 1 - i]);
+        js << fmt_fixed(rec.spectrum[rec.spectrum.size() - 1 - i], 3);
     }
     js << "]}";
     return js.str();
@@ -1103,7 +1103,8 @@ void WebMapper::workerThread() {
     string last_settings_payload;
     string mode, key, url;
     int chasemapper_decimation = 1;
-    uint64_t chasemapper_frame_counter = 0;
+    map<int, int64_t> chasemapper_last_stamp;
+    map<int, uint64_t> chasemapper_new_frame_counter;
 
     auto set_status = [&](const string& state, const string& err = string()) {
         lock_guard<mutex> lk(status_mtx_);
@@ -1127,7 +1128,8 @@ void WebMapper::workerThread() {
                 url = server_url_;
             }
             chasemapper_decimation = chasemapper_decimation_.load(memory_order_relaxed);
-            chasemapper_frame_counter = 0;
+            chasemapper_last_stamp.clear();
+            chasemapper_new_frame_counter.clear();
             last_settings_payload.clear();
             reconnect_ms = 1000;
             next_reconnect = 0;
@@ -1244,13 +1246,8 @@ void WebMapper::workerThread() {
             bool sink_ready = (mode == "remote") ? cloud.isOpen()
                             : (mode == "local") ? (local.clientCount() > 0)
                                                 : chasemapper.isOpen();
-            bool decimation_pass = true;
-            if (mode == "chasemapper") {
-                int dec = max(1, chasemapper_decimation);
-                decimation_pass = ((chasemapper_frame_counter++ % dec) == 0);
-            }
             if (sink_ready && doa_enabled.load(memory_order_relaxed) &&
-                decimation_pass && !doa_is_calibrating()) {
+                !doa_is_calibrating()) {
                 StationLocation sl = station_info.resolve();
 
                 // Respect each VFO's own squelch setting: squelch off =>
@@ -1281,6 +1278,19 @@ void WebMapper::workerThread() {
                         string record = build_doapost_json(rec, sl, sources);
                         sent = local.broadcast(record) > 0;
                     } else {
+                        if (rec.source_stamp_ms == 0) continue;
+                        auto it = chasemapper_last_stamp.find(rec.decimator_id);
+                        if (it != chasemapper_last_stamp.end() &&
+                            it->second == rec.source_stamp_ms) {
+                            continue;
+                        }
+
+                        int dec = max(1, chasemapper_decimation);
+                        uint64_t frame_index =
+                            chasemapper_new_frame_counter[rec.decimator_id]++;
+                        chasemapper_last_stamp[rec.decimator_id] = rec.source_stamp_ms;
+                        if ((frame_index % static_cast<uint64_t>(dec)) != 0) continue;
+
                         string err;
                         sent = chasemapper.sendJson(build_chasemapper_json(rec, sl), err);
                         if (!sent) {
