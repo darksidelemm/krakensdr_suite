@@ -95,6 +95,8 @@ h3 {color:#7cb3f0;margin:0 0 10px 0;font-size:15px;border-bottom:1px solid #333;
 .top-bar .hw-stats {margin-left:auto;font-size:12px;color:#8aa8c7;white-space:nowrap;font-family:'Consolas','Monaco','Courier New',monospace;padding:0 8px}
 .top-bar .status-badges {display:flex;gap:6px}
 .top-bar .status-badge {font-size:14px;padding:5px 12px;border-radius:4px;background:#2d4059;color:#fff;font-weight:500;text-align:center;white-space:nowrap}
+.top-bar .status-link {background:#0f3460;color:#7cb3f0;border:1px solid #1a4a7a;text-decoration:none}
+.top-bar .status-link:hover {background:#1a4a7a;color:#fff}
 .top-bar .gain-group {gap:8px}
 .top-bar .gain-slider {width:100px;height:6px;-webkit-appearance:none;background:linear-gradient(to right, #1a4a7a 0%, #4fc3f7 100%);outline:none;border-radius:3px;cursor:pointer}
 .top-bar .gain-slider::-webkit-slider-thumb {-webkit-appearance:none;width:16px;height:16px;background:#4fc3f7;cursor:pointer;border-radius:50%;border:2px solid #0a0a15;box-shadow:0 0 4px rgba(79,195,247,0.5)}
@@ -196,6 +198,8 @@ h3 {color:#7cb3f0;margin:0 0 10px 0;font-size:15px;border-bottom:1px solid #333;
 .doa-display canvas {width:100%;height:100%}
 .doa-display .di {font-size:13px;text-align:center;margin-top:8px;color:#888}
 .doa-display .peak {color:#ef5350;font-weight:bold}
+.doa-display .confidence-line {margin-top:4px;font-size:12px;color:#888}
+.doa-display .confidence {color:#64b5f6;font-weight:bold}
 .doa-display .ti {background:#0d3c61;padding:4px 8px;border-radius:3px;margin:5px 0;text-align:center;font-size:12px;color:#64b5f6}
 
 /* Decimator list in sidebar */
@@ -1003,6 +1007,7 @@ h3 {color:#7cb3f0;margin:0 0 10px 0;font-size:15px;border-bottom:1px solid #333;
         <span class="status-badge" id="status-calibration">Calibrating</span>
         <span class="status-badge" id="status-cooldown" style="display:none">Cooldown</span>
         <span class="status-badge" id="status-scanner">Idle</span>
+        <a class="status-badge status-link" id="status-heimdall" href="#" target="_blank" rel="noopener" onclick="openHeimdall();return false;">Heimdall</a>
       </div>
     </div>
 
@@ -5229,6 +5234,27 @@ function requestFFTSettings() {
   send('GET_FFT_SETTINGS');
 }
 
+function calculateMusicConfidence(spectrum) {
+  if (!spectrum || spectrum.length === 0) return 0;
+
+  let maxVal = -Infinity;
+  let sum = 0;
+  for (const value of spectrum) {
+    const v = Number.isFinite(value) ? value : 0;
+    if (v > maxVal) maxVal = v;
+    sum += v;
+  }
+
+  const mean = sum / spectrum.length;
+  if (mean <= 0 || maxVal <= 0) return 0;
+
+  return Math.max(0, Math.min(1, ((maxVal / mean) - 1) / 3));
+}
+
+function formatMusicConfidence(confidence) {
+  return (confidence * 100).toFixed(0) + '%';
+}
+
 // Decimator management functions
 let decimatorInfo = [];
 
@@ -5253,6 +5279,7 @@ function createDoaDisplay(decimatorId) {
     </div>
     <div class="di">
       MUSIC: <span class="peak" id="dpk-${decimatorId}">---°</span>
+      <div class="confidence-line">Confidence: <span class="confidence" id="dconf-${decimatorId}">--%</span></div>
     </div>
     <div id="el-container-${decimatorId}" style="display:none;margin-top:8px;">
       <div style="font-size:10px;color:#888;margin-bottom:4px;">Elevation: <span id="el-peak-${decimatorId}" class="peak" style="color:#dc3545">--°</span></div>
@@ -6141,9 +6168,11 @@ function connect() {
             if(plot) {
               plot.updateData(spectrum,currentTopology,resolution);
               const peakEl=$id(`dpk-${decimatorId}`);
+              const confidenceEl=$id(`dconf-${decimatorId}`);
               const timeEl=$id(`dpt-${decimatorId}`);
               const offsetEl=$id(`fo-${decimatorId}`);
               if(peakEl)peakEl.textContent=plot.getFormattedPeakAngle();
+              if(confidenceEl)confidenceEl.textContent=formatMusicConfidence(calculateMusicConfidence(spectrum));
               if(timeEl)timeEl.textContent='0.0 ms';
               if(offsetEl)offsetEl.textContent=freqOffsetKhz.toFixed(1);
 
@@ -7558,10 +7587,17 @@ function resetSettingsToDefault(){
   setTimeout(() => location.reload(), 500);
 }
 
+function getHeimdallUrl(){
+  return 'http://' + location.hostname + ':8070/';
+}
+
 // Open the Heimdall server web UI (port 8070) on the same host as this page.
 function openHeimdall(){
-  window.open('http://' + location.hostname + ':8070', '_blank');
+  window.open(getHeimdallUrl(), '_blank', 'noopener');
 }
+
+const heimdallStatusLink = $id('status-heimdall');
+if (heimdallStatusLink) heimdallStatusLink.href = getHeimdallUrl();
 
 // ============================================================================
 // HELP TOOLTIPS
