@@ -728,9 +728,8 @@ double legacy_confidence_from_spectrum(const vector<double>& spectrum) {
     return 10.0 * std::log10(peak / mean);
 }
 
-// Chasemapper/Horus UDP message. This mirrors tools/doa_value_to_chasemapper.py
-// defaults: relative bearing, reversed raw_doa plot, recalculated legacy-style
-// confidence, and FFT peak power.
+// Chasemapper/Horus UDP message: relative bearing, reversed raw_doa plot,
+// recalculated legacy-style confidence, and FFT peak power.
 string build_chasemapper_json(const DoaRecord& rec, const StationLocation& sl) {
     int bearing = static_cast<int>(lround(rec.app_bearing)) % 360;
     double timestamp_sec = static_cast<double>(rec.timestamp_ms) / 1000.0;

@@ -27,9 +27,6 @@ USB_WAIT=/usr/local/bin/kraken-wait-usb
 TARGET=/etc/systemd/system/krakensdr.target
 HEIMDALL_SVC=/etc/systemd/system/krakensdr-heimdall.service
 DOA_SVC=/etc/systemd/system/krakensdr-doa.service
-CHASEMAPPER_SVC=/etc/systemd/system/krakensdr-chasemapper.service
-CHASEMAPPER_BRIDGE=kraken_doa_v2/tools/doa_value_to_chasemapper.py
-PYTHON3="$(command -v python3 || true)"
 
 say()  { echo -e "\033[36;1m==>\033[0m \033[1m$*\033[0m"; }
 ok()   { echo -e "\033[32m   ok  $*\033[0m"; }
@@ -38,22 +35,18 @@ die()  { echo -e "\033[31;1mError:\033[0m $*" >&2; exit 1; }
 
 if [[ "${1:-}" == "--uninstall" ]]; then
     sudo systemctl disable --now krakensdr.target 2>/dev/null || true
-    sudo systemctl disable --now krakensdr-chasemapper.service 2>/dev/null || true
     sudo systemctl disable --now krakensdr-doa.service 2>/dev/null || true
     sudo systemctl disable --now krakensdr-heimdall.service 2>/dev/null || true
-    sudo rm -f "$TARGET" "$HEIMDALL_SVC" "$DOA_SVC" "$CHASEMAPPER_SVC" "$USB_WAIT"
+    sudo rm -f "$TARGET" "$HEIMDALL_SVC" "$DOA_SVC" "$USB_WAIT"
     sudo systemctl daemon-reload
     ok "Uninstalled Ubuntu headless services."
     exit 0
 fi
 
-[[ -n "$PYTHON3" ]] || die "python3 not found. Install Python 3 before installing the services."
 [[ -x "$APP_DIR/heimdall_v2/heimdall" ]] ||
     die "Heimdall binary not found at $APP_DIR/heimdall_v2/heimdall. Run install.sh first, or set APP_DIR=."
 [[ -x "$APP_DIR/kraken_doa_v2/kraken_doa" ]] ||
     die "DoA binary not found at $APP_DIR/kraken_doa_v2/kraken_doa. Run install.sh first, or set APP_DIR=."
-[[ -f "$APP_DIR/$CHASEMAPPER_BRIDGE" ]] ||
-    die "Chasemapper bridge not found at $APP_DIR/$CHASEMAPPER_BRIDGE."
 
 say "Installing Ubuntu headless services"
 echo "     user:    $RUN_USER"
@@ -168,40 +161,13 @@ ok "Wrote $(basename "$DOA_SVC")"
 sudo tee "$TARGET" >/dev/null <<'EOF'
 [Unit]
 Description=KrakenSDR headless stack
-Wants=krakensdr-heimdall.service krakensdr-doa.service krakensdr-chasemapper.service
-After=krakensdr-heimdall.service krakensdr-doa.service krakensdr-chasemapper.service
+Wants=krakensdr-heimdall.service krakensdr-doa.service
+After=krakensdr-heimdall.service krakensdr-doa.service
 
 [Install]
 WantedBy=multi-user.target
 EOF
 ok "Wrote $(basename "$TARGET")"
-
-sudo tee "$CHASEMAPPER_SVC" >/dev/null <<EOF
-[Unit]
-Description=KrakenSDR Chasemapper UDP bridge
-Documentation=file:$APP_DIR/$CHASEMAPPER_BRIDGE
-Requires=krakensdr-doa.service
-After=krakensdr-doa.service
-PartOf=krakensdr.target
-
-[Service]
-Type=simple
-User=$RUN_USER
-Group=$RUN_GROUP
-WorkingDirectory=$APP_DIR/kraken_doa_v2
-Environment=HOME=$RUN_HOME
-Environment=PYTHONUNBUFFERED=1
-ExecStart=$PYTHON3 $APP_DIR/$CHASEMAPPER_BRIDGE
-Restart=on-failure
-RestartSec=10
-TimeoutStartSec=120
-TimeoutStopSec=30
-KillSignal=SIGTERM
-
-[Install]
-WantedBy=krakensdr.target
-EOF
-ok "Wrote $(basename "$CHASEMAPPER_SVC")"
 
 sudo systemctl daemon-reload
 sudo systemctl enable krakensdr.target >/dev/null
@@ -215,8 +181,8 @@ Installed. Start now with:
 
 Check status/logs:
 
-  systemctl status krakensdr.target krakensdr-heimdall krakensdr-doa krakensdr-chasemapper
-  journalctl -u krakensdr-heimdall -u krakensdr-doa -u krakensdr-chasemapper -f
+  systemctl status krakensdr.target krakensdr-heimdall krakensdr-doa
+  journalctl -u krakensdr-heimdall -u krakensdr-doa -f
 
 Web interfaces:
 
