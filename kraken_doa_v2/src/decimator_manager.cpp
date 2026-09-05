@@ -460,6 +460,7 @@ std::string DecimatorManager::demodModeToString(DemodulatorMode mode) {
         case DemodulatorMode::WBFM: return "WBFM";
         case DemodulatorMode::NBFM: return "NBFM";
         case DemodulatorMode::AM:   return "AM";
+        case DemodulatorMode::USB:  return "USB";
         default: return "WBFM";
     }
 }
@@ -467,6 +468,7 @@ std::string DecimatorManager::demodModeToString(DemodulatorMode mode) {
 DemodulatorMode DecimatorManager::stringToDemodMode(const std::string& str) {
     if (str == "NBFM" || str == "nbfm") return DemodulatorMode::NBFM;
     if (str == "AM" || str == "am") return DemodulatorMode::AM;
+    if (str == "USB" || str == "usb") return DemodulatorMode::USB;
     return DemodulatorMode::WBFM;  // Default
 }
 

@@ -1125,9 +1125,9 @@ const bwo=[
   {decimation:2400,bandwidth:0.001,name:"1 kHz"}
 ];
 // Minimum bandwidth index to prevent stack overflow with high decimation VLAs
-// Index 21 = 12 kHz (decimation 200), safe for stack-allocated arrays
-const MIN_BW_INDEX = 21;
-const MIN_BW_MHZ = bwo[MIN_BW_INDEX].bandwidth; // 0.012 MHz
+// Index 24 = 6 kHz (decimation 400), safe for stack-allocated arrays
+const MIN_BW_INDEX = 24;
+const MIN_BW_MHZ = bwo[MIN_BW_INDEX].bandwidth; // 0.006 MHz
 
 // Max tuning-bar offset from center (Hz) for a bar of bwMhz width: half the
 // visible (edge-clipped, wideband-aware) span minus half the bar width.
@@ -5348,8 +5348,10 @@ function setDecimatorDemodMode(id, mode) {
   }
 
   // Automatically set appropriate bandwidth for the mode
-  // WBFM: 240 kHz (index 7), NBFM/AM: 16 kHz (index 20)
-  const bwIndex = (mode === 'WBFM') ? 7 : 20;
+  // WBFM: 240 kHz, NBFM: 16 kHz, AM: 60 kHz, USB: 6 kHz
+  const bwIndex = mode === 'WBFM' ? 7 :
+                  mode === 'AM' ? 14 :
+                  mode === 'USB' ? 24 : 20;
   setDecimatorBandwidthFromUI(id, bwIndex);
 }
 
@@ -5513,6 +5515,7 @@ function updateDecimatorList(info) {
           <option value="WBFM" ${dec.demod_mode === 'WBFM' ? 'selected' : ''}>WBFM</option>
           <option value="NBFM" ${dec.demod_mode === 'NBFM' ? 'selected' : ''}>NBFM</option>
           <option value="AM" ${dec.demod_mode === 'AM' ? 'selected' : ''}>AM</option>
+          <option value="USB" ${dec.demod_mode === 'USB' ? 'selected' : ''}>USB</option>
         </select>
       </div>
       <div class="dec-row">

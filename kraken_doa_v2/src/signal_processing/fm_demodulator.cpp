@@ -60,12 +60,16 @@ void FMDemodulatorRobust::setDemodulatorMode(DemodulatorMode mode) {
             case DemodulatorMode::WBFM: mode_name = "WBFM"; break;
             case DemodulatorMode::NBFM: mode_name = "NBFM"; break;
             case DemodulatorMode::AM:   mode_name = "AM"; break;
+            case DemodulatorMode::USB:  mode_name = "USB"; break;
             default: mode_name = "Unknown"; break;
         }
 
         if (mode == DemodulatorMode::AM) {
             std::cout << "Demodulator mode changed to " << mode_name
                       << " (envelope detection)" << std::endl;
+        } else if (mode == DemodulatorMode::USB) {
+            std::cout << "Demodulator mode changed to " << mode_name
+                      << " (product detection, suppressed carrier at VFO)" << std::endl;
         } else {
             float deviation = getCurrentDeviation();
             std::cout << "Demodulator mode changed to " << mode_name
@@ -83,6 +87,7 @@ float FMDemodulatorRobust::getCurrentDeviation() const {
         case DemodulatorMode::WBFM: return WBFM_DEVIATION_HZ;
         case DemodulatorMode::NBFM: return NBFM_DEVIATION_HZ;
         case DemodulatorMode::AM:   return 0.0f;  // AM doesn't use deviation
+        case DemodulatorMode::USB:  return 0.0f;  // USB doesn't use deviation
         default: return NBFM_DEVIATION_HZ;
     }
 }
@@ -207,6 +212,11 @@ void FMDemodulatorRobust::recreateFilters() {
         agc_crcf_set_bandwidth(rf_agc, 0.1f);   // Fast AGC response for bursty AM
         agc_crcf_set_gain(rf_agc, 1.0f);
         agc_crcf_set_scale(rf_agc, 0.7f);       // Slightly higher scale for AM
+    } else if (mode == DemodulatorMode::USB) {
+        // USB: Moderate AGC before product detection
+        agc_crcf_set_bandwidth(rf_agc, 0.01f);
+        agc_crcf_set_gain(rf_agc, 1.0f);
+        agc_crcf_set_scale(rf_agc, 0.7f);
     } else {
         // FM: Slower AGC to avoid modulation artifacts
         agc_crcf_set_bandwidth(rf_agc, 0.005f); // Slower AGC response
@@ -219,16 +229,23 @@ void FMDemodulatorRobust::recreateFilters() {
         case DemodulatorMode::WBFM: mode_name = "WBFM"; break;
         case DemodulatorMode::NBFM: mode_name = "NBFM"; break;
         case DemodulatorMode::AM:   mode_name = "AM"; break;
+        case DemodulatorMode::USB:  mode_name = "USB"; break;
         default: mode_name = "Unknown"; break;
     }
 
-    if (mode == DemodulatorMode::AM) {
-        // AM mode doesn't need FM demodulator, but we create one anyway for compatibility
+    if (mode == DemodulatorMode::AM || mode == DemodulatorMode::USB) {
+        // AM/USB don't need the FM demodulator, but we create one for compatibility
         float kf = 0.1f;  // Minimal value
         fm_demod = freqdem_create(kf);
-        std::cout << "Created AM demodulator: mode=" << mode_name
-                  << ", input_rate=" << (current_input_rate/1000.0f)
-                  << "kHz (envelope detection)" << std::endl;
+        if (mode == DemodulatorMode::AM) {
+            std::cout << "Created AM demodulator: mode=" << mode_name
+                      << ", input_rate=" << (current_input_rate/1000.0f)
+                      << "kHz (envelope detection)" << std::endl;
+        } else {
+            std::cout << "Created USB demodulator: mode=" << mode_name
+                      << ", input_rate=" << (current_input_rate/1000.0f)
+                      << "kHz (product detection)" << std::endl;
+        }
     } else {
         // FM demodulator with mode-dependent deviation
         float deviation_hz = (mode == DemodulatorMode::WBFM) ? WBFM_DEVIATION_HZ : NBFM_DEVIATION_HZ;
@@ -303,7 +320,7 @@ void FMDemodulatorRobust::recreateFilters() {
     audio_decim = nullptr;
 
     // De-emphasis filter (75µs time constant for FM broadcast)
-    // Only used for WBFM - NBFM/AM don't use pre-emphasis
+    // Only used for WBFM - NBFM/AM/USB don't use pre-emphasis
     if (mode == DemodulatorMode::WBFM) {
         // Bilinear one-pole low-pass at fc = 1/(2π·75µs) ≈ 2122 Hz:
         //   t = tan(π·fc/fs), H(z) = (t/(1+t))·(1+z⁻¹) / (1 - ((1-t)/(1+t))·z⁻¹)
@@ -318,7 +335,7 @@ void FMDemodulatorRobust::recreateFilters() {
         deemphasis = iirfilt_rrrf_create(b_deemph, 2, a_deemph, 2);
         std::cout << "De-emphasis filter enabled (75µs) for WBFM" << std::endl;
     } else {
-        // NBFM/AM: No de-emphasis needed, create unity passthrough filter
+        // NBFM/AM/USB: No de-emphasis needed, create unity passthrough filter
         float b_pass[1] = {1.0f};
         float a_pass[1] = {1.0f};
         deemphasis = iirfilt_rrrf_create(b_pass, 1, a_pass, 1);
@@ -402,6 +419,21 @@ std::vector<float> FMDemodulatorRobust::process_decimated_samples(
             am_output *= 2.0f;
 
             work_demod_audio_.push_back(am_output);
+        }
+    } else if (mode == DemodulatorMode::USB) {
+        // USB product detector: the VFO has already mixed the suppressed
+        // carrier to DC, so the in-phase component is the recovered audio.
+        for (const auto& sample : decimated_samples) {
+            liquid_float_complex liq_sample{sample.real(), sample.imag()};
+            liquid_float_complex agc_output;
+            agc_crcf_execute(rf_agc, liq_sample, &agc_output);
+
+            float usb_output = agc_output.real();
+
+            nbfm_dc_state = nbfm_dc_alpha * nbfm_dc_state + (1.0f - nbfm_dc_alpha) * usb_output;
+            usb_output = usb_output - nbfm_dc_state;
+
+            work_demod_audio_.push_back(usb_output);
         }
     } else {
         // FM demodulation (WBFM or NBFM)
@@ -493,10 +525,10 @@ std::vector<float> FMDemodulatorRobust::process_decimated_samples(
 
     // Step 3: Apply audio processing (de-emphasis, DC block, gain)
     for (float audio_sample : work_processed_audio_) {
-        // Apply de-emphasis (WBFM only - NBFM/AM have passthrough filter)
+        // Apply de-emphasis (WBFM only - NBFM/AM/USB have passthrough filter)
         iirfilt_rrrf_execute(deemphasis, audio_sample, &audio_sample);
 
-        // Apply DC blocking - but skip for NBFM/AM since we already did fast DC removal
+        // Apply DC blocking - but skip for NBFM/AM/USB since we already did fast DC removal
         // The slow DC blocker (6 second time constant) causes NBFM audio to fade
         if (mode == DemodulatorMode::WBFM) {
             iirfilt_rrrf_execute(dc_blocker, audio_sample, &audio_sample);
@@ -511,6 +543,10 @@ std::vector<float> FMDemodulatorRobust::process_decimated_samples(
                 break;
             case DemodulatorMode::AM:
                 // AM: Moderate gain - AGC already applied in demodulation
+                gain_compensation = 1.5f;
+                break;
+            case DemodulatorMode::USB:
+                // USB: Moderate gain after product detection and fast DC removal
                 gain_compensation = 1.5f;
                 break;
             case DemodulatorMode::WBFM:
@@ -604,11 +640,15 @@ void FMDemodulatorRobust::enable_processing() {
         case DemodulatorMode::WBFM: mode_name = "WBFM"; break;
         case DemodulatorMode::NBFM: mode_name = "NBFM"; break;
         case DemodulatorMode::AM:   mode_name = "AM"; break;
+        case DemodulatorMode::USB:  mode_name = "USB"; break;
         default: mode_name = "Unknown"; break;
     }
 
     if (mode == DemodulatorMode::AM) {
         std::cout << "Audio processing enabled (" << mode_name << " mode, envelope detection)" << std::endl;
+    } else if (mode == DemodulatorMode::USB) {
+        std::cout << "Audio processing enabled (" << mode_name
+                  << " mode, product detection)" << std::endl;
     } else {
         float deviation = getCurrentDeviation();
         std::cout << "Audio processing enabled (" << mode_name << " mode, "
@@ -738,4 +778,3 @@ std::vector<unsigned char> FMDemodulatorRobust::get_opus_packet(size_t requested
     // Return the encoded packet (copy only the used bytes)
     return std::vector<unsigned char>(opus_output_buffer.begin(), opus_output_buffer.begin() + encoded_bytes);
 }
-

@@ -630,10 +630,13 @@ void ControlHandler::handle_message_impl(string_view message) {
 
         if (mode_str == "NBFM" || mode_str == "nbfm") {
             new_mode = DemodulatorMode::NBFM;
-            suggested_bandwidth_index = 20;  // 12 kHz - appropriate for NBFM
+            suggested_bandwidth_index = 20;  // 16 kHz - appropriate for NBFM
         } else if (mode_str == "AM" || mode_str == "am") {
             new_mode = DemodulatorMode::AM;
             suggested_bandwidth_index = 14;  // 60 kHz - appropriate for AM
+        } else if (mode_str == "USB" || mode_str == "usb") {
+            new_mode = DemodulatorMode::USB;
+            suggested_bandwidth_index = 24;  // 6 kHz - appropriate for SSB voice
         } else {
             new_mode = DemodulatorMode::WBFM;  // Default to WBFM
             suggested_bandwidth_index = 7;    // 240 kHz - appropriate for WBFM
@@ -672,6 +675,7 @@ void ControlHandler::handle_message_impl(string_view message) {
             case DemodulatorMode::WBFM: mode_name = "WBFM"; break;
             case DemodulatorMode::NBFM: mode_name = "NBFM"; break;
             case DemodulatorMode::AM:   mode_name = "AM"; break;
+            case DemodulatorMode::USB:  mode_name = "USB"; break;
             default: mode_name = "WBFM"; break;
         }
 

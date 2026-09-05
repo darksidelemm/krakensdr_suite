@@ -14,7 +14,8 @@
 enum class DemodulatorMode {
     WBFM,   // Wideband FM (broadcast FM, 75kHz deviation)
     NBFM,   // Narrowband FM (voice comms, ~5kHz deviation)
-    AM      // Amplitude Modulation (envelope detection)
+    AM,     // Amplitude Modulation (envelope detection)
+    USB     // Upper sideband, VFO tuned to suppressed carrier
 };
 
 class FMDemodulatorRobust {
@@ -55,7 +56,7 @@ private:
     std::atomic<int> current_audio_decimation{5};
     std::atomic<bool> needs_resampling{false};
 
-    // DC removal for NBFM/AM (simple IIR high-pass, faster than WBFM DC blocker)
+    // DC removal for NBFM/USB (simple IIR high-pass, faster than WBFM DC blocker)
     float nbfm_dc_alpha{0.995f};  // Faster DC removal for NBFM
     float nbfm_dc_state{0.0f};    // DC filter state
 

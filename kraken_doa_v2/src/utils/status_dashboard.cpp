@@ -608,6 +608,7 @@ void render() {
                 case DemodulatorMode::WBFM: mode = "WBFM"; break;
                 case DemodulatorMode::NBFM: mode = "NBFM"; break;
                 case DemodulatorMode::AM:   mode = "AM";   break;
+                case DemodulatorMode::USB:  mode = "USB";  break;
             }
             o << col::DIM << "  " << col::RST << mode
               << col::DIM << "  fill " << col::RST << f1(fm_demod.get_buffer_fill()) << "%"
