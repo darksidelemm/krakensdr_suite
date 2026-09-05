@@ -784,7 +784,7 @@ h3 {color:#7cb3f0;margin:0 0 10px 0;font-size:15px;border-bottom:1px solid #333;
     <!-- Web Mapper -->
     <div class="sb-section">
       <div class="sb-header" onclick="toggleSection(this)">
-        <h3>🌐 Web Mapper<span class="help" tabindex="0" role="button" aria-label="Help">?<span class="tip">Streams DoA bearings to the KrakenSDR web mapper (built in — no separate middleware needed). <b>KrakenPro Cloud</b> relays to map.krakenrf.com and needs your KrakenPro API key; <b>Local Network</b> broadcasts the records to LAN map clients over WebSocket. Each VFO's squelch is respected: with squelch off its bearings always transmit; with squelch on, only while the squelch is open. Callsign &amp; location come from the Station Information panel above.</span></span></h3>
+        <h3>🌐 Web Mapper<span class="help" tabindex="0" role="button" aria-label="Help">?<span class="tip">Streams DoA bearings to external map clients. <b>KrakenPro Cloud</b> relays to map.krakenrf.com and needs your KrakenPro API key; <b>Local Network</b> broadcasts records to LAN map clients over WebSocket; <b>Chasemapper</b> broadcasts Horus-compatible UDP bearing messages. Each VFO's squelch is respected: with squelch off its bearings always transmit; with squelch on, only while that squelch is open. Callsign &amp; location come from the Station Information panel above.</span></span></h3>
         <span class="sb-toggle">▼</span>
       </div>
       <div class="sb-content">
@@ -801,6 +801,7 @@ h3 {color:#7cb3f0;margin:0 0 10px 0;font-size:15px;border-bottom:1px solid #333;
           <select id="wm-mode" onchange="setWebMapperMode(this.value)" style="flex:1">
             <option value="remote" selected>KrakenPro Cloud</option>
             <option value="local">Local Network</option>
+            <option value="chasemapper">Chasemapper</option>
           </select>
         </div>
         <div id="wm-remote-fields">
@@ -819,6 +820,13 @@ h3 {color:#7cb3f0;margin:0 0 10px 0;font-size:15px;border-bottom:1px solid #333;
             <label>WS Port:</label>
             <input type="number" id="wm-ws-port" value="8021" min="1" max="65535" style="width:80px" onchange="setWebMapperWsPort()">
             <span class="help" tabindex="0" role="button" aria-label="Help">?<span class="tip">Local map clients connect to <b>ws://&lt;this device&gt;:&lt;port&gt;</b> and receive one JSON record per VFO bearing.</span></span>
+          </div>
+        </div>
+        <div id="wm-chasemapper-fields" style="display:none">
+          <div class="ctrl-row">
+            <label>Decimation:</label>
+            <input type="number" id="wm-chasemapper-decimation" value="1" min="1" step="1" style="width:80px" onchange="setWebMapperChasemapperDecimation()">
+            <span class="help" tabindex="0" role="button" aria-label="Help">?<span class="tip">Sends one of every N DoA frames to Chasemapper over UDP broadcast port 55672. A value of 1 sends every frame.</span></span>
           </div>
         </div>
         <div id="wm-status" style="font-size:12px;color:#8aa8c7;line-height:1.8;margin-top:4px">
@@ -2513,6 +2521,10 @@ function applySyncCmdInner(cmd) {
   }
   else if ((v = arg('WEB_MAPPER_WS_PORT:')) !== null) {
     const el = $id('wm-ws-port');
+    if (idle(el) && el.value != v) el.value = v;
+  }
+  else if ((v = arg('WEB_MAPPER_CHASEMAPPER_DECIMATION:')) !== null) {
+    const el = $id('wm-chasemapper-decimation');
     if (idle(el) && el.value != v) el.value = v;
   }
   else if ((v = arg('MUSIC_FB_AVERAGING:')) !== null) {
@@ -6658,9 +6670,10 @@ function addTouchHandlers(el, down, move, up) {
     updateWebMapperModeFields(v);
   }
   function updateWebMapperModeFields(v) {
-    const rf = $id('wm-remote-fields'), lf = $id('wm-local-fields');
-    if (rf) rf.style.display = (v === 'local') ? 'none' : '';
+    const rf = $id('wm-remote-fields'), lf = $id('wm-local-fields'), cf = $id('wm-chasemapper-fields');
+    if (rf) rf.style.display = (v === 'remote') ? '' : 'none';
     if (lf) lf.style.display = (v === 'local') ? '' : 'none';
+    if (cf) cf.style.display = (v === 'chasemapper') ? '' : 'none';
   }
   function setWebMapperKey() {
     const el = $id('wm-key');
@@ -6681,6 +6694,13 @@ function addTouchHandlers(el, down, move, up) {
     const p = parseInt(el && el.value);
     if (p >= 1 && p <= 65535) send('WEB_MAPPER_WS_PORT:' + p);
   }
+  function setWebMapperChasemapperDecimation() {
+    const el = $id('wm-chasemapper-decimation');
+    let n = parseInt(el && el.value);
+    if (!Number.isFinite(n) || n < 1) n = 1;
+    if (el) el.value = n;
+    send('WEB_MAPPER_CHASEMAPPER_DECIMATION:' + n);
+  }
 
   // Live state from system_status.web_mapper (500ms broadcast).
   function updateWebMapperStatus(wm) {
@@ -6695,6 +6715,10 @@ function addTouchHandlers(el, down, move, up) {
       else if (wm.state === 'listening') {
         color = (wm.clients > 0) ? '#4caf50' : '#8aa8c7';
         label = 'Listening (' + wm.clients + ' client' + (wm.clients === 1 ? '' : 's') + ')';
+      }
+      else if (wm.state === 'sending') {
+        color = '#4caf50';
+        label = 'Sending UDP';
       }
       else if (wm.state === 'error') { color = '#ef5350'; label = wm.error || 'Error'; }
       else { color = '#ffb74d'; label = 'Connecting…'; }
@@ -6711,6 +6735,10 @@ function addTouchHandlers(el, down, move, up) {
     if (md && document.activeElement !== md && wm.mode && md.value !== wm.mode) {
       md.value = wm.mode;
       updateWebMapperModeFields(wm.mode);
+    }
+    const cd = $id('wm-chasemapper-decimation');
+    if (cd && document.activeElement !== cd && wm.chasemapper_decimation && cd.value != wm.chasemapper_decimation) {
+      cd.value = wm.chasemapper_decimation;
     }
   }
 

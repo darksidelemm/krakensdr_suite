@@ -94,6 +94,7 @@ namespace {
         {"web_mapper_key",           "WEB_MAPPER_KEY:",           VType::STRING, ""},
         {"web_mapper_url",           "WEB_MAPPER_URL:",           VType::STRING, "wss://map.krakenrf.com:2096"},
         {"web_mapper_ws_port",       "WEB_MAPPER_WS_PORT:",       VType::NUMBER, "8021"},
+        {"web_mapper_chasemapper_decimation", "WEB_MAPPER_CHASEMAPPER_DECIMATION:", VType::NUMBER, "1"},
         {"web_mapper_enabled",       "WEB_MAPPER:",               VType::BOOL,   "0"},
         // Local DoA recording (config only — recording is never auto-started;
         // the target filename is transient and not persisted)

@@ -142,6 +142,7 @@ string b64_encode(const unsigned char* data, size_t len) {
 // ---------------------------------------------------------------------------
 
 constexpr size_t WS_MAX_FRAME = 4 * 1024 * 1024;
+constexpr int CHASEMAPPER_UDP_PORT = 55672;
 
 // Encode one FIN text/binary/control frame. Client->server frames are masked.
 string ws_encode(uint8_t opcode, const string& payload, bool mask) {
@@ -607,6 +608,57 @@ private:
 };
 
 // ---------------------------------------------------------------------------
+// Chasemapper sink: Horus UDP BEARING JSON broadcast
+// ---------------------------------------------------------------------------
+
+class ChasemapperSink {
+public:
+    ~ChasemapperSink() { close(); }
+
+    bool isOpen() const { return fd_ >= 0; }
+
+    bool open(string& err) {
+        close();
+        fd_ = socket(AF_INET, SOCK_DGRAM, 0);
+        if (fd_ < 0) {
+            err = string("UDP socket failed: ") + strerror(errno);
+            return false;
+        }
+
+        int one = 1;
+        setsockopt(fd_, SOL_SOCKET, SO_BROADCAST, &one, sizeof(one));
+        memset(&dst_, 0, sizeof(dst_));
+        dst_.sin_family = AF_INET;
+        dst_.sin_port = htons(CHASEMAPPER_UDP_PORT);
+        dst_.sin_addr.s_addr = INADDR_BROADCAST;
+        return true;
+    }
+
+    bool sendJson(const string& payload, string& err) {
+        if (fd_ < 0 && !open(err)) return false;
+        ssize_t n = sendto(fd_, payload.data(), payload.size(), MSG_NOSIGNAL,
+                           reinterpret_cast<struct sockaddr*>(&dst_), sizeof(dst_));
+        if (n != static_cast<ssize_t>(payload.size())) {
+            err = string("UDP send failed: ") + strerror(errno);
+            close();
+            return false;
+        }
+        return true;
+    }
+
+    void close() {
+        if (fd_ >= 0) {
+            ::close(fd_);
+            fd_ = -1;
+        }
+    }
+
+private:
+    int fd_ = -1;
+    struct sockaddr_in dst_ = {};
+};
+
+// ---------------------------------------------------------------------------
 // doapost record building (parity with the middleware's mapper.js, which in
 // turn mirrors DOA_value.html)
 // ---------------------------------------------------------------------------
@@ -650,6 +702,59 @@ string build_doapost_json(const DoaRecord& rec, const StationLocation& sl,
        << ",\"adc_overdrive\":0"
        << ",\"num_corr_sources\":\"" << num_corr_sources << "\""
        << ",\"snr_db\":\"" << fmt_fixed(rec.power_db, 1) << "\"}";
+    return js.str();
+}
+
+double legacy_confidence_from_spectrum(const vector<double>& spectrum) {
+    if (spectrum.empty()) return 0.0;
+    double peak_db = -1e300;
+    for (double v : spectrum)
+        if (std::isfinite(v) && v > peak_db) peak_db = v;
+    if (peak_db < -1e200) return 0.0;
+
+    double sum = 0.0;
+    double peak = 0.0;
+    int count = 0;
+    for (double v : spectrum) {
+        if (!std::isfinite(v)) continue;
+        double lin = std::pow(10.0, (v - peak_db) / 10.0);
+        sum += lin;
+        if (lin > peak) peak = lin;
+        count++;
+    }
+    if (count == 0) return 0.0;
+    double mean = sum / count;
+    if (peak <= 0.0 || mean <= 0.0) return 0.0;
+    return 10.0 * std::log10(peak / mean);
+}
+
+// Chasemapper/Horus UDP message. This mirrors tools/doa_value_to_chasemapper.py
+// defaults: relative bearing, reversed raw_doa plot, recalculated legacy-style
+// confidence, and FFT peak power.
+string build_chasemapper_json(const DoaRecord& rec, const StationLocation& sl) {
+    int bearing = static_cast<int>(lround(rec.app_bearing)) % 360;
+    double timestamp_sec = static_cast<double>(rec.timestamp_ms) / 1000.0;
+    double confidence = legacy_confidence_from_spectrum(rec.spectrum);
+
+    ostringstream js;
+    js << "{\"type\":\"BEARING\""
+       << ",\"bearing_type\":\"relative\""
+       << ",\"bearing\":" << bearing
+       << ",\"source\":\"" << json_escape(sl.id.empty() ? rec.station_id_csv : sl.id) << "\""
+       << ",\"timestamp\":" << fmt_fixed(timestamp_sec, 3)
+       << ",\"confidence\":" << fmt_num(confidence)
+       << ",\"power\":" << fmt_num(rec.fft_peak_power_db)
+       << ",\"raw_bearing_angles\":[";
+    for (int i = 0; i < 360; i++) {
+        if (i) js << ",";
+        js << i;
+    }
+    js << "],\"raw_doa\":[";
+    for (size_t i = 0; i < rec.spectrum.size(); i++) {
+        if (i) js << ",";
+        js << fmt_num(rec.spectrum[rec.spectrum.size() - 1 - i]);
+    }
+    js << "]}";
     return js.str();
 }
 
@@ -922,7 +1027,7 @@ void WebMapper::setEnabled(bool en) {
 }
 
 void WebMapper::setMode(const string& mode) {
-    string m = (mode == "local") ? "local" : "remote";
+    string m = (mode == "local" || mode == "chasemapper") ? mode : "remote";
     lock_guard<mutex> lk(cfg_mtx_);
     if (mode_ != m) { mode_ = m; config_gen_.fetch_add(1, memory_order_release); }
 }
@@ -945,6 +1050,13 @@ void WebMapper::setLocalWsPort(int port) {
         config_gen_.fetch_add(1, memory_order_release);
 }
 
+void WebMapper::setChasemapperDecimation(int decimation) {
+    if (decimation < 1) decimation = 1;
+    if (decimation > 1000000) decimation = 1000000;
+    if (chasemapper_decimation_.exchange(decimation) != decimation)
+        config_gen_.fetch_add(1, memory_order_release);
+}
+
 string WebMapper::getMode() const { lock_guard<mutex> lk(cfg_mtx_); return mode_; }
 string WebMapper::getKey() const { lock_guard<mutex> lk(cfg_mtx_); return key_; }
 string WebMapper::getServerUrl() const { lock_guard<mutex> lk(cfg_mtx_); return server_url_; }
@@ -962,6 +1074,7 @@ void WebMapper::appendStatusJson(string& out) const {
     out += ",\"state\":\"" + json_escape(state) + "\"";
     out += ",\"clients\":" + to_string(local_clients_.load(memory_order_relaxed));
     out += ",\"records\":" + to_string(records_sent_.load(memory_order_relaxed));
+    out += ",\"chasemapper_decimation\":" + to_string(getChasemapperDecimation());
     out += ",\"error\":\"" + json_escape(err) + "\"}";
 }
 
@@ -978,6 +1091,7 @@ void WebMapper::stop() {
 void WebMapper::workerThread() {
     CloudSink cloud;
     LocalSink local;
+    ChasemapperSink chasemapper;
 
     uint32_t seen_gen = config_gen_.load(memory_order_acquire) - 1;
     int64_t next_capture = 0;
@@ -988,6 +1102,8 @@ void WebMapper::workerThread() {
     int64_t last_err_log = 0;
     string last_settings_payload;
     string mode, key, url;
+    int chasemapper_decimation = 1;
+    uint64_t chasemapper_frame_counter = 0;
 
     auto set_status = [&](const string& state, const string& err = string()) {
         lock_guard<mutex> lk(status_mtx_);
@@ -1003,12 +1119,15 @@ void WebMapper::workerThread() {
             seen_gen = gen;
             cloud.close();
             local.close();
+            chasemapper.close();
             {
                 lock_guard<mutex> lk(cfg_mtx_);
                 mode = mode_;
                 key = key_;
                 url = server_url_;
             }
+            chasemapper_decimation = chasemapper_decimation_.load(memory_order_relaxed);
+            chasemapper_frame_counter = 0;
             last_settings_payload.clear();
             reconnect_ms = 1000;
             next_reconnect = 0;
@@ -1078,7 +1197,7 @@ void WebMapper::workerThread() {
                     }
                 }
             }
-        } else {  // local
+        } else if (mode == "local") {
             if (!local.isListening()) {
                 string err;
                 int port = local_ws_port_.load(memory_order_relaxed);
@@ -1100,15 +1219,38 @@ void WebMapper::workerThread() {
                 slept = true;
                 local_clients_.store(local.clientCount(), memory_order_relaxed);
             }
+        } else {  // chasemapper
+            if (!chasemapper.isOpen()) {
+                string err;
+                if (chasemapper.open(err)) {
+                    cout << "[WebMapper] Chasemapper UDP broadcast on port "
+                         << CHASEMAPPER_UDP_PORT << endl;
+                    set_status("sending");
+                } else {
+                    if (now - last_err_log > 30000) {
+                        cerr << "[WebMapper] Chasemapper sink: " << err << endl;
+                        last_err_log = now;
+                    }
+                    set_status("error", err);
+                    this_thread::sleep_for(chrono::seconds(2));
+                    slept = true;
+                }
+            }
         }
 
         // --- Record capture tick (200 ms, matching the browser DoA stream) ---
         if (now >= next_capture) {
             next_capture = now + 200;
             bool sink_ready = (mode == "remote") ? cloud.isOpen()
-                                                 : (local.clientCount() > 0);
+                            : (mode == "local") ? (local.clientCount() > 0)
+                                                : chasemapper.isOpen();
+            bool decimation_pass = true;
+            if (mode == "chasemapper") {
+                int dec = max(1, chasemapper_decimation);
+                decimation_pass = ((chasemapper_frame_counter++ % dec) == 0);
+            }
             if (sink_ready && doa_enabled.load(memory_order_relaxed) &&
-                !doa_is_calibrating()) {
+                decimation_pass && !doa_is_calibrating()) {
                 StationLocation sl = station_info.resolve();
 
                 // Respect each VFO's own squelch setting: squelch off =>
@@ -1122,17 +1264,32 @@ void WebMapper::workerThread() {
 
                 for (const DoaRecord& rec : capture_doa_records()) {
                     if (squelched(rec.decimator_id)) continue;
-                    int sources = 1;
-                    auto dec = decimator_manager.getDecimator(rec.decimator_id);
-                    if (dec && dec->music_processor)
-                        sources = max(1, dec->music_processor->getNumSignalSources());
-                    string record = build_doapost_json(rec, sl, sources);
                     bool sent = false;
                     if (mode == "remote") {
+                        int sources = 1;
+                        auto dec = decimator_manager.getDecimator(rec.decimator_id);
+                        if (dec && dec->music_processor)
+                            sources = max(1, dec->music_processor->getNumSignalSources());
+                        string record = build_doapost_json(rec, sl, sources);
                         sent = cloud.sendText("{\"apikey\":\"" + json_escape(key) +
                                               "\",\"data\":" + record + "}");
-                    } else {
+                    } else if (mode == "local") {
+                        int sources = 1;
+                        auto dec = decimator_manager.getDecimator(rec.decimator_id);
+                        if (dec && dec->music_processor)
+                            sources = max(1, dec->music_processor->getNumSignalSources());
+                        string record = build_doapost_json(rec, sl, sources);
                         sent = local.broadcast(record) > 0;
+                    } else {
+                        string err;
+                        sent = chasemapper.sendJson(build_chasemapper_json(rec, sl), err);
+                        if (!sent) {
+                            if (now - last_err_log > 30000) {
+                                cerr << "[WebMapper] Chasemapper send: " << err << endl;
+                                last_err_log = now;
+                            }
+                            set_status("error", err);
+                        }
                     }
                     if (sent) records_sent_.fetch_add(1, memory_order_relaxed);
                 }
@@ -1144,4 +1301,5 @@ void WebMapper::workerThread() {
 
     cloud.close();
     local.close();
+    chasemapper.close();
 }

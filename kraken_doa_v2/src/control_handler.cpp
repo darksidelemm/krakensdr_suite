@@ -153,6 +153,7 @@ static bool is_replayed_command(string_view msg) {
         "LOG_INTERVAL:", "LOG_FORMAT:",
         "WEB_MAPPER:", "WEB_MAPPER_MODE:", "WEB_MAPPER_KEY:",
         "WEB_MAPPER_URL:", "WEB_MAPPER_WS_PORT:",
+        "WEB_MAPPER_CHASEMAPPER_DECIMATION:",
     };
     for (const char* p : prefixes) {
         if (msg.starts_with(p)) return true;
@@ -1079,6 +1080,13 @@ void ControlHandler::handle_message_impl(string_view message) {
         }
         web_mapper.setLocalWsPort(port);
         cout << "Web mapper local WS port set to " << port << endl;
+    }
+    else if (message.starts_with("WEB_MAPPER_CHASEMAPPER_DECIMATION:")) {
+        int decimation = parse_int(message, 34);
+        if (decimation < 1) decimation = 1;
+        web_mapper.setChasemapperDecimation(decimation);
+        cout << "Web mapper Chasemapper decimation set to "
+             << web_mapper.getChasemapperDecimation() << endl;
     }
     // Dynamic decimator controls
     else if (message.starts_with("ADD_DECIMATOR")) {
